@@ -26,8 +26,8 @@ import qualified Text.PrettyPrint.ANSI.Leijen as TrifectaPP
 (<??>) = flip (<?>)
 
 -- | Syntax rules for parsing variable-looking like identifiers.
-varId :: IdentifierStyle Parser
-varId = IdentifierStyle
+identStyle :: IdentifierStyle Parser
+identStyle = IdentifierStyle
     { _styleName = "variable"
     , _styleStart = lower <|> char '_'
     , _styleLetter = alphaNum <|> oneOf "_'#"
@@ -38,7 +38,7 @@ varId = IdentifierStyle
 -- | Parse a variable identifier. Variables start with a lower-case letter or
 -- @_@, followed by a string consisting of alphanumeric characters or @'@, @_@.
 litp :: Parser Literal
-litp = "varname" <??> (Literal <$> (ident varId))
+litp = "varname" <??> (Literal <$> (ident identStyle))
 
 
 intp :: Parser Int
@@ -59,7 +59,7 @@ binary :: String -> BinOp -> Assoc -> Operator Parser Expr'
 binary name op assoc = Infix p assoc where
   p :: Parser (Expr' -> Expr' -> Expr')
   p = do
-        reserve varId name
+        reserve identStyle name
         return $ mkBinopExpr op
  
   mkBinopExpr :: BinOp -> Expr' -> Expr' -> Expr'
@@ -78,7 +78,7 @@ binopp :: Parser Expr'
 binopp = buildExpressionParser table term
 
 exprp :: Parser Expr'
-exprp = EInt () <$> intp <|> ELiteral () <$> litp  <|>  binopp
+exprp =  binopp
 
 ifp :: Parser Stmt'
 ifp = do
