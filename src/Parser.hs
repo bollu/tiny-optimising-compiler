@@ -4,6 +4,7 @@ import Language
 import Control.Monad (void)
 
 import Control.Applicative
+import Data.HashSet as HashSet
 
 import Text.Trifecta as TR
 import Text.Parser.Token.Highlight
@@ -13,24 +14,31 @@ import Text.Trifecta.Delta
 import Text.Parser.Char
 import Text.Parser.Combinators
 import Text.Parser.Token
+import Text.Parser.Expression
+import Text.Parser.Token (TokenParsing, natural, parens, reserve)
+import Text.Parser.Token.Style (emptyOps)
+
 
 import Data.ByteString.Char8 as BS
 import qualified Text.PrettyPrint.ANSI.Leijen as TrifectaPP
 
-import Data.Text.Prettyprint.Doc as PP
+-- import Data.Text.Prettyprint.Doc as PP
+(<??>) = flip (<?>)
 
+-- | Syntax rules for parsing variable-looking like identifiers.
+varId :: IdentifierStyle Parser
+varId = IdentifierStyle
+    { _styleName = "variable"
+    , _styleStart = lower <|> char '_'
+    , _styleLetter = alphaNum <|> oneOf "_'#"
+    , _styleReserved = HashSet.fromList ["let", "letrec", "in", "case", "of", "default", "*", "+"]
+    , _styleHighlight = Identifier
+    , _styleReservedHighlight = ReservedIdentifier }
+
+-- | Parse a variable identifier. Variables start with a lower-case letter or
+-- @_@, followed by a string consisting of alphanumeric characters or @'@, @_@.
 litp :: Parser Literal
-litp = do
-    c <- lower
-    rest <- many (alphaNum <|> oneOf ['_', '-'])
-    possible_end <- optional (char '?')
-    spaces
-
-    let end = 
-          case possible_end of 
-            Just c -> [c]
-            Nothing -> []
-    return $ Literal (c:(rest ++ end))
+litp = "varname" <??> (Literal <$> (ident varId))
 
 
 intp :: Parser Int
@@ -39,11 +47,38 @@ intp = fromIntegral <$> integer
 boolp :: Parser Bool
 boolp = ((const True) <$> symbol "true") <|> ((const False) <$> symbol "false")
 
+term   :: Parser Expr'
+term    =  (Text.Parser.Token.parens exprp
+       <|> ELiteral () <$> litp <|> EInt () <$> intp) <?> "simple expression"
+
+table  :: [[Operator Parser Expr']]
+table  = [ [binary "*" Multiply AssocLeft ],
+          [binary "+" Plus  AssocLeft]]
+
+binary :: String -> BinOp -> Assoc -> Operator Parser Expr'
+binary name op assoc = Infix p assoc where
+  p :: Parser (Expr' -> Expr' -> Expr')
+  p = do
+        reserve varId name
+        return $ mkBinopExpr op
+ 
+  mkBinopExpr :: BinOp -> Expr' -> Expr' -> Expr'
+  mkBinopExpr op lhs rhs = EBinOp () lhs op rhs
+        
+
+ -- prefix  name fun       = Prefix (fun <$ reservedOp name)
+--  postfix name fun       = Postfix (fun <$ reservedOp name)
+
+
+
+
+
+
 binopp :: Parser Expr'
-binopp = undefined
+binopp = buildExpressionParser table term
 
 exprp :: Parser Expr'
-exprp = EInt () <$> intp <|> ELiteral () <$> litp 
+exprp = EInt () <$> intp <|> ELiteral () <$> litp  <|>  binopp
 
 ifp :: Parser Stmt'
 ifp = do
