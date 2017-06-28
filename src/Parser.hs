@@ -1,5 +1,6 @@
 module Parser where
 
+import Language
 import Control.Monad (void)
 
 import Control.Applicative
@@ -14,28 +15,9 @@ import Text.Parser.Combinators
 import Text.Parser.Token
 
 import Data.ByteString.Char8 as BS
+import qualified Text.PrettyPrint.ANSI.Leijen as TrifectaPP
 
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
-
-newtype Literal = Literal { unLiteral :: String }
-
-data BinOp = Plus | Minus | Multiply | Divide | L | G | LEQ | GEQ | EQ
-
-data Expr a = EBinOp a (Expr a) BinOp (Expr a) |
-                  EInt a Int |
-                  EBool a Bool |
-                  ELiteral a Literal
-
-type Expr' = Expr ()
-
-type Block a = [Stmt a]
-data Stmt a = If a (Expr a) (Block a) | While a (Expr a) (Block a) | Assign a Literal (Expr a)
-
-type Stmt' = Stmt ()
-
-
-type Program a = [Stmt a]
-type Program' = Program ()
+import Data.Text.Prettyprint.Doc as PP
 
 litp :: Parser Literal
 litp = do
@@ -61,7 +43,7 @@ binopp :: Parser Expr'
 binopp = undefined
 
 exprp :: Parser Expr'
-exprp = EInt () <$> intp <|> EBool () <$> boolp <|> ELiteral () <$> litp 
+exprp = EInt () <$> intp <|> ELiteral () <$> litp 
 
 ifp :: Parser Stmt'
 ifp = do
@@ -90,12 +72,18 @@ assignp = do
   rhs <- exprp
   return $ Assign () name rhs
 
+definep :: Parser Stmt'
+definep = do
+  symbol "define"
+  name <- litp
+  return $ Define () name
+
 
 stmtp :: Parser Stmt'
-stmtp = ifp <|> whilep <|> assignp
+stmtp = ifp <|> whilep <|> assignp <|> definep
 
 programp :: Parser Program'
-programp = sepEndBy1 stmtp (symbol ";") 
+programp = Program <$> sepEndBy1 stmtp (symbol ";") 
 
 
 -- vLow level interface to trifecta
@@ -109,4 +97,4 @@ type ErrorString = String
 parseProgram :: String -> Either ErrorString Program'
 parseProgram str = case parseProgram_ str of
                       Success a -> Right a
-                      Failure ErrInfo{ _errDoc = e } -> Left (PP.displayS (PP.renderPretty 0.8 80 e) "")
+                      Failure ErrInfo{ _errDoc = e } -> Left (TrifectaPP.displayS (TrifectaPP.renderPretty 0.8 80 e) "")
