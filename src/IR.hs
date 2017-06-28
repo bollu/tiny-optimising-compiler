@@ -5,11 +5,12 @@ import qualified Language as L
 data SSA
 data NotSSA
 
-data Label a = Label String
+data Label a = Label { unLabel ::  String }
 instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
 
+-- this is wrong, we need OpLabelInst (Label Inst) | OpLabelBB (Label BB)
 data Operand = OpConstant Int | OpLiteral L.Literal
 
 instance Pretty Operand where
@@ -20,6 +21,10 @@ instance Pretty Operand where
 
 
 data BasicBlock = BasicBlock { bbInsts :: [LabeledInst], bbRet :: RetInst , bbLabel :: Label BasicBlock }
+appendBB :: LabeledInst -> BasicBlock -> BasicBlock
+appendBB i bb = bb {
+  bbInsts = bbInsts bb ++ [i]
+ }
 
 newBB :: BasicBlock
 newBB = BasicBlock [] Terminal (Label "undefined")

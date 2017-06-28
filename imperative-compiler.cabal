@@ -64,7 +64,9 @@ executable imperative-compiler
                        ansi-wl-pprint,
                        bytestring,
                        prettyprinter,
-                       text
+                       text,
+                       containers,
+                       mtl
   
   -- Directories containing source files.
   hs-source-dirs:      src

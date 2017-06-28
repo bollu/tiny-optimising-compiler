@@ -5,6 +5,7 @@ import qualified Data.Text.Lazy as L
 import qualified Language as Lang
 import Data.Text.Prettyprint.Doc.Render.Text
 import Data.Text.Prettyprint.Doc
+import ProgramToIR
 
 
 prettyToText :: Doc ann -> L.Text
