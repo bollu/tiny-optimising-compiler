@@ -51,7 +51,7 @@ appendInst i = liftEditToState $ liftBBEdit $ (appendBB i)
 
 mkBinOpInst :: Operand -> BinOp ->  Operand -> Inst
 mkBinOpInst lhs Plus rhs = InstAdd lhs rhs
-mkBinOpInst lhs Minus rhs = InstSub lhs rhs
+mkBinOpInst lhs Multiply rhs = InstMul lhs rhs
 
 buildExpr :: Expr' -> State Builder Operand
 buildExpr (EInt _ i) = return $  OpConstant i
@@ -69,7 +69,9 @@ buildExpr (EBinOp _ lhs op rhs) = do
 buildAssign :: Literal -> Expr' -> State Builder Inst
 buildAssign lit expr = do
   val <- buildExpr expr
-  return $ InstStore (OpLiteral lit) val
+  let inst = (labeledInst (InstStore (OpLiteral lit) val) (Label ("store" ++ (unLiteral lit))))
+  appendInst inst
+  return (unlabelInst inst)
 
 buildStmt :: Stmt' -> State Builder ()
 buildStmt (Assign _ lit expr) = buildAssign lit expr >> return ()

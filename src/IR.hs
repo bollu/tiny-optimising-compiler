@@ -31,19 +31,19 @@ newBB = BasicBlock [] Terminal (Label "undefined")
 
 instance Pretty BasicBlock where
   pretty (BasicBlock insts ret label) = 
-    pretty label <> pretty ":" <> line <> (nest 4 body) where
+    vcat [(pretty label <> pretty ":"), (nest 4 body)] where
       body = vcat (map (<> semi)
                         ((map pretty insts) ++ [pretty ret]))
 
 data Inst where
   InstAdd :: Operand -> Operand -> Inst
-  InstSub :: Operand -> Operand -> Inst
+  InstMul :: Operand -> Operand -> Inst
   InstLoad :: Operand -> Inst 
   InstStore :: Operand -> Operand -> Inst 
 
 instance Pretty Inst where
   pretty (InstAdd l r) = pretty "add" <+> pretty l <+> pretty r
-  pretty (InstSub l r) = pretty "add" <+> pretty l <+> pretty r
+  pretty (InstMul l r) = pretty "mul" <+> pretty l <+> pretty r
   pretty (InstLoad op) = pretty "load" <+> pretty op
   pretty (InstStore slot val) = pretty "store" <+> pretty val <+> pretty "in" <+> pretty slot
 
