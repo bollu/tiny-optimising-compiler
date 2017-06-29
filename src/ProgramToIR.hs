@@ -6,80 +6,175 @@ import Data.Traversable
 import Data.Foldable
 import Control.Monad.State.Strict
 
-type BBId = Int
 data Builder = Builder {
   currentBBId :: BBId,
-  bbs :: [BasicBlock]
+  -- | List of basic blocks
+  bbs :: [BasicBlock],
+  -- | counter to generate new instruction name
+  tmpInstNamesCounter :: Int,
+  -- | Map from literal name to Value
+  literalToValue :: M.Map Literal Value
 }
 
+-- | Create a new builder with an empty basic block
 newBuilder :: Builder
 newBuilder = Builder {
   currentBBId = 0,
-  bbs = [newBB]
+  bbs = [defaultBB],
+  tmpInstNamesCounter=0,
+  literalToValue=mempty
 }
 
--- | update the nth element. very inefficient.
+-- | Focus the basic block given by the ID
+focusBB :: BBId -> State Builder ()
+focusBB id = modify (\b-> b { currentBBId=id })
+
+-- | Append a new basic block. DOES NOT switch the currentBBId to the new basic block. For that, see focusBB
+createNewBB :: Label Builder -> State Builder BBId
+createNewBB name = do
+  nbbs <- gets (length . bbs)
+  let nameunique = Label ((unLabel name) ++ "." ++ show nbbs)
+  let namedbb = defaultBB { bbLabel=nameunique }
+  curbbs <- gets bbs
+  modify (\b -> b { bbs = curbbs ++ [namedbb]} )
+  return nbbs
+
+-- | Update the nth element. very inefficient.
 updateIdx :: [a] -> Int -> (a -> a) -> [a]
 updateIdx xs n f = take n xs ++ [f (xs !! n)] ++ drop (n + 1) xs
 
 
-liftEditToState :: (s -> s) -> State s ()
-liftEditToState f = state $ \s -> ((), f s)
+-- | Create a temporary instruction name.
+getTempInstName :: State Builder (Label Inst)
+getTempInstName = do
+  n <- gets tmpInstNamesCounter
+  modify (\b -> b { tmpInstNamesCounter=n+1 })
+  return . Label $ "tmp." ++ show n
+
+
+-- | Create a temporary name for a return instruction
+-- | Note that we cheat in the implementation, by just "relabelling"
+-- | an instruction label to a ret instruction label.
+getTempRetInstName :: State Builder (Label RetInst)
+getTempRetInstName = Label . unLabel <$> getTempInstName
+
+-- | Add a mapping between literal and value.
+mapLiteralToValue :: Literal -> Value -> State Builder ()
+mapLiteralToValue l v = do
+  ltov <- gets literalToValue
+  -- TODO: check that we do not repeat literals.
+  modify (\b -> b { literalToValue=M.insert l v ltov })
+  return ()
+
+-- | Get the value that the Literal maps to.
+getLiteralValueMapping :: Literal -> State Builder Value
+getLiteralValueMapping lit = do
+  ltov <- gets literalToValue
+  return $ ltov M.! lit
 
 -- | lift an edit of a basic block to the current basic block focused
--- | in the builder
+-- | in the Builder.
 liftBBEdit :: (BasicBlock -> BasicBlock) -> Builder -> Builder
 liftBBEdit f builder = builder {
     bbs = updateIdx (bbs builder) (currentBBId builder) f
 }
 
-mkNewBB :: State Builder BBId
-mkNewBB =  state $ \builder -> (length (bbs builder), Builder {
-            bbs = bbs builder ++ [newBB],
-            currentBBId = (length (bbs builder))
-})
-
+-- | Set the builder's current basic block to the i'th basic block
 setBB :: Builder -> Int -> Builder
 setBB builder i = builder {
   currentBBId = i
 }
 
 
-appendInst :: LabeledInst -> State Builder ()
-appendInst i = liftEditToState $ liftBBEdit $ (appendBB i) 
+-- | Append instruction "I" to the builder
+appendInst :: Named Inst -> State Builder Value
+appendInst i = do
+  modify . liftBBEdit $ (appendInstToBB i) 
+  return $ ValueInstRef (namedName i)
+  where
+    appendInstToBB :: Named Inst -> BasicBlock -> BasicBlock
+    appendInstToBB i bb = bb { bbInsts=bbInsts bb ++ [i] }
+
+setRetInst :: RetInst -> State Builder ()
+setRetInst i = do
+  modify . liftBBEdit $ (setBBRetInst i) 
+  where
+    setBBRetInst :: RetInst -> BasicBlock -> BasicBlock
+    setBBRetInst i bb = bb { bbRetInst=i }
 
 
-mkBinOpInst :: Operand -> BinOp ->  Operand -> Inst
+mkBinOpInst :: Value -> BinOp ->  Value -> Inst
 mkBinOpInst lhs Plus rhs = InstAdd lhs rhs
 mkBinOpInst lhs Multiply rhs = InstMul lhs rhs
+mkBinOpInst lhs L rhs = InstL lhs rhs
+mkBinOpInst lhs And rhs = InstAnd lhs rhs
 
-buildExpr :: Expr' -> State Builder Operand
-buildExpr (EInt _ i) = return $  OpConstant i
-buildExpr (ELiteral _ i) = return $ OpLiteral i
+buildExpr :: Expr' -> State Builder Value
+buildExpr (EInt _ i) = return $  ValueConstInt i
+buildExpr (ELiteral _ lit) = getLiteralValueMapping lit
 buildExpr (EBinOp _ lhs op rhs) = do
     lhs <- buildExpr lhs
     rhs <- buildExpr rhs
     let inst = (mkBinOpInst lhs op rhs)
+    name <- getTempInstName
     -- TODO: generate fresh labels
-    let label = Label "lbl"
-    appendInst (labeledInst inst label)
-    return (OpLiteral (Literal (unLabel label)))
+    appendInst $ name =:= inst
 
-
-buildAssign :: Literal -> Expr' -> State Builder Inst
+-- | Build the IR for the assignment, and return a reference to @InstStore
+-- | TODO: technically, store should not return a Value
+buildAssign :: Literal -> Expr' -> State Builder Value
 buildAssign lit expr = do
-  val <- buildExpr expr
-  let inst = (labeledInst (InstStore (OpLiteral lit) val) (Label ("store" ++ (unLiteral lit))))
-  appendInst inst
-  return (unlabelInst inst)
+  exprval <- buildExpr expr
+  litval <- getLiteralValueMapping lit
+  name <- getTempInstName
+  -- TODO: do not allow Store to be named with type system trickery
+  appendInst $ name =:= InstStore litval exprval
 
+-- | Build IR for "define x"
+buildDefine :: Literal -> State Builder Value
+buildDefine lit = do
+  name <- getTempInstName
+  mapLiteralToValue lit (ValueInstRef name)
+  appendInst $ name =:= InstAlloc
+
+-- | Build IR for "Stmt"
 buildStmt :: Stmt' -> State Builder ()
+buildStmt (Define _ lit) = buildDefine lit >> return ()
 buildStmt (Assign _ lit expr) = buildAssign lit expr >> return ()
-buildStmt (Define _ lit) = return ()
+buildStmt (If _ cond then' else') = do
+  condval <- buildExpr cond
+  currbb <- gets currentBBId
+  
+  bbthen <- createNewBB (Label "then")
+  focusBB bbthen
+  stmtsToInsts then'
 
 
-stmtsToInsts :: [Stmt'] -> [BasicBlock]
-stmtsToInsts stmts = bbs $ execState (for_ stmts buildStmt) newBuilder
+  bbelse <- createNewBB (Label "else")
+  focusBB bbelse
+  stmtsToInsts else'
+
+  bbjoin <- createNewBB (Label "join")
+
+  focusBB bbthen
+  thenjump <- getTempInstName
+  setRetInst $ RetInstBranch bbjoin
+
+  focusBB bbelse
+  setRetInst $ RetInstBranch bbjoin
+  
+  focusBB currbb
+  name <- getTempRetInstName
+  setRetInst $ RetInstConditionalBranch condval bbthen bbelse
+
+  focusBB bbjoin
+
+
+-- Given a collection of statements, create a State that will create these
+-- statements in the builder
+stmtsToInsts :: [Stmt'] -> State Builder ()
+stmtsToInsts stmts = (for_ stmts buildStmt)
+
 
 programToIR :: Program' -> IRProgram
-programToIR (Program stmts) = IRProgram (stmtsToInsts stmts)
+programToIR (Program stmts) = IRProgram (bbs $ execState (stmtsToInsts stmts) newBuilder)

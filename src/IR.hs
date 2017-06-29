@@ -5,74 +5,76 @@ import qualified Language as L
 data SSA
 data NotSSA
 
+-- | A label that uses the phantom @a as a type based discriminator
 data Label a = Label { unLabel ::  String }
 instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
+-- a Value, which can either be a constant, or a reference to an instruction.
+data Value = ValueConstInt Int | ValueInstRef (Label Inst)
 
--- this is wrong, we need OpLabelInst (Label Inst) | OpLabelBB (Label BB)
-data Operand = OpConstant Int | OpLiteral L.Literal
+instance Pretty Value where
+  pretty (ValueConstInt i) = pretty i
+  pretty (ValueInstRef name) = pretty "%" <> pretty name
 
-instance Pretty Operand where
-  pretty (OpConstant i) = pretty i
-
-  pretty (OpLiteral l) = pretty l
-
-
-
-data BasicBlock = BasicBlock { bbInsts :: [LabeledInst], bbRet :: RetInst , bbLabel :: Label BasicBlock }
-appendBB :: LabeledInst -> BasicBlock -> BasicBlock
-appendBB i bb = bb {
-  bbInsts = bbInsts bb ++ [i]
- }
-
-newBB :: BasicBlock
-newBB = BasicBlock [] Terminal (Label "undefined")
-
-instance Pretty BasicBlock where
-  pretty (BasicBlock insts ret label) = 
-    vcat [(pretty label <> pretty ":"), (nest 4 body)] where
-      body = vcat (map (<> semi)
-                        ((map pretty insts) ++ [pretty ret]))
-
-data Inst where
-  InstAdd :: Operand -> Operand -> Inst
-  InstMul :: Operand -> Operand -> Inst
-  InstLoad :: Operand -> Inst 
-  InstStore :: Operand -> Operand -> Inst 
+-- | Instructions that we allow within a basic block.
+data Inst  where
+  InstAlloc :: Inst
+  InstAdd :: Value -> Value -> Inst
+  InstMul :: Value -> Value -> Inst
+  InstL :: Value -> Value -> Inst
+  InstAnd :: Value -> Value -> Inst
+  InstLoad :: Value -> Inst 
+  InstStore :: Value -> Value -> Inst 
 
 instance Pretty Inst where
+  pretty (InstAlloc) = pretty "alloc"
   pretty (InstAdd l r) = pretty "add" <+> pretty l <+> pretty r
   pretty (InstMul l r) = pretty "mul" <+> pretty l <+> pretty r
+  pretty (InstL l r) = pretty "lessthan" <+> pretty l <+> pretty r
+  pretty (InstAnd l r) = pretty "and" <+> pretty l <+> pretty r
   pretty (InstLoad op) = pretty "load" <+> pretty op
   pretty (InstStore slot val) = pretty "store" <+> pretty val <+> pretty "in" <+> pretty slot
 
+-- | Represents @a that is optionally named by a @Label a
+data Named a = Named { namedName :: Label a, namedData :: a }
 
-data LabeledInst = LabeledInst { unlabelInst :: Inst, getLabel :: Maybe (Label Inst) }
-nonLabeledInst :: Inst -> LabeledInst
-nonLabeledInst i = LabeledInst i Nothing
 
-labeledInst :: Inst -> Label Inst -> LabeledInst
-labeledInst i label = LabeledInst i (Just label)
+-- | Infix operator for @Named constructor
+(=:=) :: Label a  -> a -> Named a
+name =:= a = Named name a
 
-instance Pretty (LabeledInst) where
-  pretty (LabeledInst i l) = pretty l <+> pretty ":=" <+> pretty i
 
+instance Pretty a => Pretty (Named a) where
+  pretty (Named name data') = pretty name <+> pretty ":=" <+> pretty data'
+
+-- | Used to identify basic blocks
+type BBId = Int
+-- | A basic block. Single-entry, multiple-exit.
+data BasicBlock = BasicBlock { bbInsts :: [Named Inst], bbRetInst :: RetInst , bbLabel :: Label BasicBlock }
+
+-- | Default basic block.
+defaultBB :: BasicBlock
+defaultBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
+
+instance Pretty BasicBlock where
+  pretty (BasicBlock insts ret label) = 
+    nest 4 (vsep ([pretty label <> pretty ":"] ++ body)) where
+      body = map pretty insts ++ [pretty ret]
+
+
+-- | Return instructions are the only ones that can cause control flow
+-- | between one basic block to another.
 data RetInst = 
-  Break  (Label BasicBlock) | 
-  CondJump { jumpOp :: Operand,
-             trueLabel :: Label BasicBlock,
-             falseLabel :: Label BasicBlock  
-           } |
-  Terminal
+  RetInstConditionalBranch Value BBId BBId |
+  RetInstBranch BBId | 
+  RetInstTerminal 
 
 instance Pretty RetInst where
-  pretty (Break label) = pretty "break" <+> pretty label
-  pretty (Terminal) = pretty "TERMINAL"
-  pretty (CondJump op tl fl) =
-    pretty "condjump" <+> pretty "true" <> braces (pretty tl) <+>
-      pretty "false" <> braces (pretty fl)
+  pretty (RetInstTerminal) = pretty "TERMINAL"
+  pretty (RetInstBranch next) = pretty "branch" <+> pretty next
+  pretty (RetInstConditionalBranch cond then' else') = pretty "branch if" <+> pretty cond <+> pretty "then" <+> pretty then' <+> pretty "else" <+> pretty else'
 
 newtype IRProgram = IRProgram [BasicBlock]
 instance Pretty IRProgram where
-  pretty (IRProgram bbs) = vcat (map (\b -> pretty b <> hardline) bbs)
+  pretty (IRProgram bbs) = vsep (map (\b -> pretty b <> hardline) bbs)

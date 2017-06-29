@@ -31,7 +31,7 @@ identStyle = IdentifierStyle
     { _styleName = "variable"
     , _styleStart = lower <|> char '_'
     , _styleLetter = alphaNum <|> oneOf "_'#"
-    , _styleReserved = HashSet.fromList ["let", "letrec", "in", "case", "of", "default", "*", "+"]
+    , _styleReserved = HashSet.fromList ["define", "assign", "if", "else", "*", "+", "<", "&&"]
     , _styleHighlight = Identifier
     , _styleReservedHighlight = ReservedIdentifier }
 
@@ -52,27 +52,19 @@ term    =  (Text.Parser.Token.parens exprp
        <|> ELiteral () <$> litp <|> EInt () <$> intp) <?> "simple expression"
 
 table  :: [[Operator Parser Expr']]
-table  = [ [binary "*" Multiply AssocLeft ],
-          [binary "+" Plus  AssocLeft]]
+table  = [[binary "*" Multiply AssocLeft],
+          [binary "+" Plus  AssocLeft], 
+          [binary "<" L AssocLeft],
+          [binary "&&" And AssocLeft]]
 
 binary :: String -> BinOp -> Assoc -> Operator Parser Expr'
 binary name op assoc = Infix p assoc where
-  p :: Parser (Expr' -> Expr' -> Expr')
-  p = do
-        reserve identStyle name
-        return $ mkBinopExpr op
- 
-  mkBinopExpr :: BinOp -> Expr' -> Expr' -> Expr'
-  mkBinopExpr op lhs rhs = EBinOp () lhs op rhs
-        
-
- -- prefix  name fun       = Prefix (fun <$ reservedOp name)
---  postfix name fun       = Postfix (fun <$ reservedOp name)
-
-
-
-
-
+    p :: Parser (Expr' -> Expr' -> Expr')
+    p = do
+          reserve identStyle name
+          return $ mkBinopExpr op
+    mkBinopExpr :: BinOp -> Expr' -> Expr' -> Expr'
+    mkBinopExpr op lhs rhs = EBinOp () lhs op rhs
 
 binopp :: Parser Expr'
 binopp = buildExpressionParser table term
@@ -85,9 +77,14 @@ ifp = do
   symbol "if"
   e <- exprp
   symbol "{"
-  stmts <- sepEndBy stmtp (symbol ";")
+  thenstmts <- sepEndBy stmtp (symbol ";")
   symbol "}"
-  return $ If () e stmts
+  symbol "else"
+
+  symbol "{"
+  elsestmts <- sepEndBy stmtp (symbol ";")
+  symbol "}"
+  return $ If () e thenstmts elsestmts
 
 whilep :: Parser Stmt'
 whilep = do

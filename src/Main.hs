@@ -6,6 +6,8 @@ import qualified Language as Lang
 import Data.Text.Prettyprint.Doc.Render.Text
 import Data.Text.Prettyprint.Doc
 import ProgramToIR
+import System.IO
+import System.Environment
 
 
 prettyToText :: Doc ann -> L.Text
@@ -16,7 +18,8 @@ compileProgram p = undefined
 
 main :: IO ()
 main = do
-     input <- readFile "programs/input.c"
+     args <- getArgs
+     input <- readFile (args !! 0)
      case parseProgram input of
         Left err -> putStrLn err
         Right program -> do
