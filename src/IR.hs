@@ -14,7 +14,7 @@ instance Pretty (Label a) where
 data Value = ValueConstInt Int | ValueInstRef (Label Inst)
 
 instance Pretty Value where
-  pretty (ValueConstInt i) = pretty i
+  pretty (ValueConstInt i) = pretty i <> pretty "#"
   pretty (ValueInstRef name) = pretty "%" <> pretty name
 
 -- | Instructions that we allow within a basic block.
