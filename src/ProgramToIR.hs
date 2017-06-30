@@ -1,15 +1,15 @@
 module ProgramToIR where
 import Language
 import IR 
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import Data.Traversable
 import Data.Foldable
 import Control.Monad.State.Strict
 
 data Builder = Builder {
   currentBBId :: BBId,
-  -- | List of basic blocks
-  bbs :: [BasicBlock],
+  -- | Mapping from BBId to BasicBlock
+  bbIdToBB :: M.Map BBId BasicBlock,
   -- | counter to generate new instruction name
   tmpInstNamesCounter :: Int,
   -- | Map from literal name to Value
@@ -18,12 +18,16 @@ data Builder = Builder {
 
 -- | Create a new builder with an empty basic block
 newBuilder :: Builder
-newBuilder = Builder {
-  currentBBId = 0,
-  bbs = [defaultBB],
+newBuilder = execState (createNewBB (Label "default")) (Builder {
+  currentBBId = Label "",
+  bbIdToBB = M.empty,
   tmpInstNamesCounter=0,
   literalToValue=mempty
-}
+}) 
+
+-- | Get the current Basic block ID
+getCurrentBBId :: State Builder BBId
+getCurrentBBId = gets currentBBId
 
 -- | Focus the basic block given by the ID
 focusBB :: BBId -> State Builder ()
@@ -32,16 +36,12 @@ focusBB id = modify (\b-> b { currentBBId=id })
 -- | Append a new basic block. DOES NOT switch the currentBBId to the new basic block. For that, see focusBB
 createNewBB :: Label Builder -> State Builder BBId
 createNewBB name = do
-  nbbs <- gets (length . bbs)
+  idtobbs <- gets bbIdToBB
+  let nbbs = M.size idtobbs
   let nameunique = Label ((unLabel name) ++ "." ++ show nbbs)
-  let namedbb = defaultBB { bbLabel=nameunique }
-  curbbs <- gets bbs
-  modify (\b -> b { bbs = curbbs ++ [namedbb]} )
-  return nbbs
-
--- | Update the nth element. very inefficient.
-updateIdx :: [a] -> Int -> (a -> a) -> [a]
-updateIdx xs n f = take n xs ++ [f (xs !! n)] ++ drop (n + 1) xs
+  let newbb = defaultBB { bbLabel=nameunique }
+  modify (\b -> b { bbIdToBB = M.insert nameunique newbb idtobbs  } )
+  return nameunique
 
 
 -- | Create a temporary instruction name.
@@ -76,11 +76,11 @@ getLiteralValueMapping lit = do
 -- | in the Builder.
 liftBBEdit :: (BasicBlock -> BasicBlock) -> Builder -> Builder
 liftBBEdit f builder = builder {
-    bbs = updateIdx (bbs builder) (currentBBId builder) f
+    bbIdToBB = M.adjust f (currentBBId builder) (bbIdToBB builder) 
 }
 
 -- | Set the builder's current basic block to the i'th basic block
-setBB :: Builder -> Int -> Builder
+setBB :: Builder -> BBId -> Builder
 setBB builder i = builder {
   currentBBId = i
 }
@@ -143,7 +143,7 @@ buildStmt (Define _ lit) = buildDefine lit >> return ()
 buildStmt (Assign _ lit expr) = buildAssign lit expr >> return ()
 buildStmt (If _ cond then' else') = do
   condval <- buildExpr cond
-  currbb <- gets currentBBId
+  currbb <- getCurrentBBId
   
   bbthen <- createNewBB (Label "then")
   focusBB bbthen
@@ -170,10 +170,10 @@ buildStmt (If _ cond then' else') = do
   focusBB bbjoin
 
 buildStmt (While _ cond body) = do
-  curbb <- gets currentBBId
-  condbb <- createNewBB "while.cond"
-  bodybb <- createNewBB "while.body"
-  endbb <- createNewBB "while.end"
+  curbb <- getCurrentBBId
+  condbb <- createNewBB (Label "while.cond")
+  bodybb <- createNewBB (Label "while.body")
+  endbb <- createNewBB (Label "while.end")
 
   focusBB condbb
   condval <- buildExpr cond
@@ -183,10 +183,10 @@ buildStmt (While _ cond body) = do
   stmtsToInsts body
   setRetInst $ RetInstBranch condbb
 
-  focusbb curbb
+  focusBB curbb
   setRetInst $ RetInstBranch condbb
 
-  focusbb endbb
+  focusBB endbb
 
 
 -- Given a collection of statements, create a State that will create these
@@ -196,4 +196,4 @@ stmtsToInsts stmts = (for_ stmts buildStmt)
 
 
 programToIR :: Program' -> IRProgram
-programToIR (Program stmts) = IRProgram (bbs $ execState (stmtsToInsts stmts) newBuilder)
+programToIR (Program stmts) = IRProgram (M.elems . bbIdToBB $ execState (stmtsToInsts stmts) newBuilder)

@@ -2,11 +2,13 @@
 module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
+import qualified Data.List.NonEmpty as NE
+
 data SSA
 data NotSSA
 
 -- | A label that uses the phantom @a as a type based discriminator
-data Label a = Label { unLabel ::  String }
+data Label a = Label { unLabel ::  String } deriving(Eq, Ord)
 instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
@@ -26,6 +28,7 @@ data Inst  where
   InstAnd :: Value -> Value -> Inst
   InstLoad :: Value -> Inst 
   InstStore :: Value -> Value -> Inst 
+  InstPhi :: NE.NonEmpty (BBId, Value) -> Inst
 
 instance Pretty Inst where
   pretty (InstAlloc) = pretty "alloc"
@@ -34,7 +37,11 @@ instance Pretty Inst where
   pretty (InstL l r) = pretty "lessthan" <+> pretty l <+> pretty r
   pretty (InstAnd l r) = pretty "and" <+> pretty l <+> pretty r
   pretty (InstLoad op) = pretty "load" <+> pretty op
-  pretty (InstStore slot val) = pretty "store" <+> pretty val <+> pretty "in" <+> pretty slot
+  pretty (InstStore slot val) = pretty "store" <+> pretty val <+>
+                                pretty "in" <+> pretty slot
+  pretty (InstPhi philist) = 
+    hcat (punctuate comma (NE.toList (fmap (\(bbid, val) ->
+                                brackets (pretty bbid <+> pretty val)) philist)))
 
 -- | Represents @a that is optionally named by a @Label a
 data Named a = Named { namedName :: Label a, namedData :: a }
@@ -49,7 +56,7 @@ instance Pretty a => Pretty (Named a) where
   pretty (Named name data') = pretty name <+> pretty ":=" <+> pretty data'
 
 -- | Used to identify basic blocks
-type BBId = Int
+type BBId = Label BasicBlock
 -- | A basic block. Single-entry, multiple-exit.
 data BasicBlock = BasicBlock { bbInsts :: [Named Inst], bbRetInst :: RetInst , bbLabel :: Label BasicBlock }
 
