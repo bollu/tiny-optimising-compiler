@@ -57,6 +57,7 @@ data BasicBlock = BasicBlock { bbInsts :: [Named Inst], bbRetInst :: RetInst , b
 defaultBB :: BasicBlock
 defaultBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
 
+-- TODO: replace nest with indent
 instance Pretty BasicBlock where
   pretty (BasicBlock insts ret label) = 
     nest 4 (vsep ([pretty label <> pretty ":"] ++ body)) where

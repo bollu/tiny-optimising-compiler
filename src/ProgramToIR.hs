@@ -169,6 +169,25 @@ buildStmt (If _ cond then' else') = do
 
   focusBB bbjoin
 
+buildStmt (While _ cond body) = do
+  curbb <- gets currentBBId
+  condbb <- createNewBB "while.cond"
+  bodybb <- createNewBB "while.body"
+  endbb <- createNewBB "while.end"
+
+  focusBB condbb
+  condval <- buildExpr cond
+  setRetInst $ RetInstConditionalBranch condval bodybb endbb
+
+  focusBB bodybb
+  stmtsToInsts body
+  setRetInst $ RetInstBranch condbb
+
+  focusbb curbb
+  setRetInst $ RetInstBranch condbb
+
+  focusbb endbb
+
 
 -- Given a collection of statements, create a State that will create these
 -- statements in the builder
