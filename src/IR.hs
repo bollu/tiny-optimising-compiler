@@ -3,6 +3,7 @@ module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Map as M
 
 data SSA
 data NotSSA
@@ -83,6 +84,10 @@ instance Pretty RetInst where
   pretty (RetInstBranch next) = pretty "branch" <+> pretty next
   pretty (RetInstConditionalBranch cond then' else') = pretty "branch if" <+> pretty cond <+> pretty "then" <+> pretty then' <+> pretty "else" <+> pretty else'
 
-newtype IRProgram = IRProgram [BasicBlock]
+data IRProgram = IRProgram {
+  irProgramBBMap :: M.Map BBId BasicBlock,
+  irProgramEntryBBId :: BBId
+}
+
 instance Pretty IRProgram where
-  pretty (IRProgram bbs) = vsep (map (\b -> pretty b <> hardline) bbs)
+  pretty (IRProgram bbmap entryId) = vsep [pretty "entry: " <+> pretty entryId, pretty (M.elems bbmap)]

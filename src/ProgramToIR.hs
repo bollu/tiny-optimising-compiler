@@ -7,6 +7,9 @@ import Data.Foldable
 import Control.Monad.State.Strict
 
 data Builder = Builder {
+  -- | The first BB that is present in the module
+  entryBBId :: BBId,
+ -- | The BB the builder is currently focused on
   currentBBId :: BBId,
   -- | Mapping from BBId to BasicBlock
   bbIdToBB :: M.Map BBId BasicBlock,
@@ -18,12 +21,21 @@ data Builder = Builder {
 
 -- | Create a new builder with an empty basic block
 newBuilder :: Builder
-newBuilder = execState (createNewBB (Label "default")) (Builder {
-  currentBBId = Label "",
-  bbIdToBB = M.empty,
-  tmpInstNamesCounter=0,
-  literalToValue=mempty
-}) 
+newBuilder = 
+  execState mkDefaultBB initbuilder
+    where
+      mkDefaultBB = do
+        bbid <- createNewBB (Label "default")
+        -- Set the "entry" basic block so we can later give it to IRProgram
+        modify (\b -> b { entryBBId = bbid })
+
+      initbuilder = (Builder {
+        entryBBId = Label "",
+        currentBBId = Label "",
+        bbIdToBB = M.empty,
+        tmpInstNamesCounter=0,
+        literalToValue=mempty
+    }) 
 
 -- | Get the current Basic block ID
 getCurrentBBId :: State Builder BBId
@@ -196,4 +208,9 @@ stmtsToInsts stmts = (for_ stmts buildStmt)
 
 
 programToIR :: Program' -> IRProgram
-programToIR (Program stmts) = IRProgram (M.elems . bbIdToBB $ execState (stmtsToInsts stmts) newBuilder)
+programToIR (Program stmts) = 
+  IRProgram {
+    irProgramBBMap = bbIdToBB  builder,
+    irProgramEntryBBId = entryBBId builder
+  } where
+      builder = execState (stmtsToInsts stmts) newBuilder
