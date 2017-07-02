@@ -8,10 +8,21 @@ import Data.Text.Prettyprint.Doc
 import ProgramToIR
 import System.IO
 import System.Environment
+import TransformMem2Reg
 
 
-prettyToText :: Doc ann -> L.Text
-prettyToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
+docToText :: Doc ann -> L.Text
+docToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
+
+docToString :: Doc ann -> String
+docToString = L.unpack . docToText
+
+prettyableToText :: Pretty a => a -> L.Text
+prettyableToText a = docToText (pretty a)
+
+prettyableToString :: Pretty a => a -> String
+prettyableToString  a = docToString (pretty a)
+
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
 compileProgram p = undefined
@@ -24,7 +35,9 @@ main = do
         Left err -> putStrLn err
         Right program -> do
             putStrLn "*** Program:"
-            putStrLn . L.unpack . prettyToText . pretty $  program
+            putStrLn . prettyableToString $  program
             putStrLn "*** IR:"
-            putStrLn . L.unpack . prettyToText . pretty $  programToIR program
+            putStrLn . prettyableToString .  programToIR $ program
+            putStrLn "*** Dom info:"
+            putStrLn . docToString $ vsep (map pretty (take 10 (dominfo_ . programToIR $ program)))
 
