@@ -22,8 +22,16 @@ main = do
         Right program -> do
             putStrLn "*** Program:"
             putStrLn . prettyableToString $  program
+
             putStrLn "*** IR:"
-            putStrLn . prettyableToString .  programToIR $ program
+            let irprogram =  programToIR program
+            putStrLn . prettyableToString $ irprogram
+
             putStrLn "*** Dom info:"
-            putStrLn . docToString $ (pretty (dominfo . programToIR $ program))
+            let dominatorInfo = constructBBDominators irprogram
+            putStrLn . docToString . pretty $ dominatorInfo
+
+            putStrLn "*** Dominator tree: "
+            let dominatorTree = constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
+            putStrLn . prettyableToString $ dominatorTree
 

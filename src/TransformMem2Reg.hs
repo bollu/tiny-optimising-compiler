@@ -1,14 +1,28 @@
-module TransformMem2Reg where
+module TransformMem2Reg(constructDominatorTree, BBGraph(..), constructBBDominators) where
+{-# LANGUAGE TupleSections #-}
+
 import IR
 import Data.Tree
 import qualified Data.Set as S
 import qualified Data.Map as M
-import qualified Data.Graph as G
 import Data.Text.Prettyprint.Doc as PP
 import Debug.Trace
 import PrettyUtils
 import Control.Monad.Reader
 import Data.Traversable
+import qualified Data.Monoid as Monoid
+
+-- | adjacency list representation
+newtype BBGraph = BBGraph { bbGraphEdges :: [(BBId, BBId)] }
+
+instance Pretty BBGraph where
+  pretty graph = 
+    pretty "edges: " <+>
+      (vcat . map (indent 4. pretty) . bbGraphEdges $ graph)
+
+-- | return predecessors
+getPredecessors :: BBGraph -> BBId -> [BBId]
+getPredecessors bbgraph bbid = [ src | (src, sink) <-(bbGraphEdges bbgraph), sink == bbid]
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
@@ -16,18 +30,12 @@ getBBSuccessors (BasicBlock { bbRetInst = RetInstTerminal}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
-mkBBGraph :: M.Map BBId BasicBlock -> (G.Graph, G.Vertex -> BBId)
-mkBBGraph bbMap = let (g, vtoedge) = G.graphFromEdges' edges in (g, make_vtobbid vtoedge) where
-    edges :: [(BasicBlock, BBId, [BBId])]
-    edges = map makeEdge (M.toList bbMap)
+mkBBGraph :: M.Map BBId BasicBlock -> BBGraph
+mkBBGraph bbMap = BBGraph (M.foldMapWithKey makeEdges bbMap)  where
 
-    -- Make the edge corresponding to basic block.
-    makeEdge :: (BBId, BasicBlock) -> (BasicBlock, BBId, [BBId])
-    makeEdge (bbid, bb) = (bb, bbid, getBBSuccessors bb)
-
-    -- Pull out only BBId from edge
-    make_vtobbid :: (G.Vertex -> (BasicBlock, BBId, [BBId])) -> G.Vertex -> BBId
-    make_vtobbid vtoedge v = let (_, bbid, _) = vtoedge v in bbid
+    -- Make the edges corresponding to basic block.
+    makeEdges :: BBId -> BasicBlock -> [(BBId, BBId)]
+    makeEdges bbid bb = map (\succ -> (bbid, succ)) (getBBSuccessors bb)
 
 -- a dominator tree is a tree of basic blocks
 newtype DominatorTree  = Tree BasicBlock
@@ -49,10 +57,10 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
 type BBIdToDomSet = M.Map BBId DomSet
 
 
-initialDomSetMap :: EntryBBId ->  -- ^entry BB ID
+initialBBIdToDomSet :: EntryBBId ->  -- ^entry BB ID
                   [BBId] ->  -- ^All BB IDs
                   BBIdToDomSet
-initialDomSetMap entryid ids = M.fromList (mapEntry:mapAllExceptEntry) where
+initialBBIdToDomSet entryid ids = M.fromList (mapEntry:mapAllExceptEntry) where
   -- entry block only dominantes itself
   mapEntry :: (BBId, DomSet)
   mapEntry = (entryid, S.fromList [entryid])
@@ -69,34 +77,23 @@ initialDomSetMap entryid ids = M.fromList (mapEntry:mapAllExceptEntry) where
 
 
 -- Get the predecessors of 'BBId' in 'Graph'
-getPredecessors :: G.Graph -> (G.Vertex -> BBId) ->  BBId -> [BBId]
-getPredecessors bbgraph vtobbid bbid = map getFrom (filter isToId (G.edges bbgraph)) where
-  -- Get the basic block this edge is from
-  getFrom :: G.Edge -> BBId
-  getFrom = vtobbid . fst
-
-  -- Check if the edge is to the ID we care about
-  isToId :: G.Edge -> Bool
-  isToId = (== bbid) . vtobbid . snd
 
 dominfoIterate :: EntryBBId -> -- ^Entry node ID
-                 G.Graph -> -- ^Graph of BBs
-                   (G.Vertex -> BBId) -> -- ^Graph vertex to BBId
+                 BBGraph -> -- ^Graph of BBs
                  BBIdToDomSet -> -- ^Previous dom info
                  BBIdToDomSet -- ^ New dom info
-dominfoIterate rootid bbgraph vtobbid prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
+dominfoIterate entryid bbgraph prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
   -- For the root node, DomSet_iplus1(root) = root
   -- For a non-root node, DomSet_iplus1(n) = intersect (forall p \in preds(n) DomSet_i(p)) U {n}
   computeNewDom :: BBId -> DomSet -> DomSet
-  computeNewDom id old = if id == rootid then old else computeNewNonRootDom id
+  computeNewDom id old = if id == entryid then old else computeNewNonRootDom id
   -- compute the dom set of a node that is not the root
   computeNewNonRootDom :: BBId -> DomSet
   computeNewNonRootDom bbid = (combinePredDomSets ((getDoms . preds) bbid)) `S.union` (S.singleton bbid)
 
   -- predecessors of id
   preds :: BBId -> [BBId]
-  preds bbid = trace ("preds(" ++ (prettyableToString bbid) ++ ")" ++ "\n" ++ docToString (vcat . map (indent 4 . pretty) $ p) ++ "\n---\n") p where
-                p = getPredecessors bbgraph vtobbid bbid
+  preds bbid = getPredecessors bbgraph bbid
 
   -- combine all predecessor dom sets by intersecting them
   combinePredDomSets :: [DomSet] -> DomSet
@@ -111,33 +108,32 @@ getFirstAdjacentEqual :: Eq a => [a] -> a
 getFirstAdjacentEqual as = fst . head $ dropWhile (\(a, a') -> a /= a') (zip as (tail as))
 
 -- Map each basic block to the set of basic blocks that dominates it
-dominfo :: IRProgram -> BBIdToDomSet
-dominfo program = getFirstAdjacentEqual iterations where
+constructBBDominators :: IRProgram -> BBIdToDomSet
+constructBBDominators program = getFirstAdjacentEqual iterations where
     -- iterations of domInfoIterate applied
     iterations :: [BBIdToDomSet]
-    iterations = iterate (dominfoIterate rootid (fst graphinfo) (snd graphinfo)) initdominfo
+    iterations = iterate (dominfoIterate entryid bbgraph) initdominfo
 
     -- graph structure
-    graphinfo :: (G.Graph, G.Vertex -> BBId)
-    graphinfo =  mkBBGraph (irProgramBBMap program)
+    bbgraph :: BBGraph
+    bbgraph =  mkBBGraph (irProgramBBMap program)
 
-    -- seed domInfo
+    -- seed constructBBDominators
     initdominfo :: BBIdToDomSet
-    initdominfo = initialDomSetMap rootid bbids
+    initdominfo = initialBBIdToDomSet entryid bbids
 
     -- ID of the root node
-    rootid :: BBId
-    rootid = irProgramEntryBBId program
+    entryid :: BBId
+    entryid = irProgramEntryBBId program
 
     -- list of all basic block IDs
     bbids :: [BBId]
     bbids = M.keys (irProgramBBMap program)
 
 
-
 data DomTreeContext = DomTreeContext {
   ctxBBIdToDomSet :: BBIdToDomSet,
-  ctxEntryId :: BBId
+  ctxEntryId :: EntryBBId
 }
 
 -- | Returns the dominators of BBId
@@ -182,4 +178,30 @@ getImmediateDominator bbid = do
                     _ -> error $ "*** found more than one idom:\n" ++ show (prettyableToString idoms)
 
 
+foldMapM :: (Foldable t, Monad m, Monoid r) => t a -> (a -> m r) -> m r
+foldMapM ta mfn = foldM (\monoid a -> (monoid Monoid.<>) <$> (mfn a)) mempty ta
+
+newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }
+
+instance Pretty DomTree where
+  pretty graph = 
+    vcat [pretty "dom tree edges: ",
+          (vcat . map (indent 4. pretty) . domTreeEdges $ graph)]
+
+-- | internal reader that is not exported
+createDominatorTree_ :: Reader DomTreeContext DomTree
+createDominatorTree_ = do
+  bbs <- reader (M.keys . ctxBBIdToDomSet)
+  idoms <- foldMapM bbs (\bb -> do
+                              mIdom <- getImmediateDominator bb
+                              case mIdom of
+                                Just idom -> return [(idom, bb)]
+                                Nothing -> return [])
+  return $ DomTree idoms
+
+
+
+
+constructDominatorTree :: M.Map BBId DomSet -> EntryBBId -> DomTree
+constructDominatorTree bbidToDomSet entrybb  = runReader createDominatorTree_ (DomTreeContext bbidToDomSet entrybb)
 
