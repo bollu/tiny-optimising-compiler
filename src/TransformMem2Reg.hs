@@ -17,8 +17,8 @@ newtype BBGraph = BBGraph { bbGraphEdges :: [(BBId, BBId)] }
 
 instance Pretty BBGraph where
   pretty graph = 
-    pretty "edges: " <+>
-      (vcat . map (indent 4. pretty) . bbGraphEdges $ graph)
+    vcat [pretty "BB graph edges",
+          (vcat . map (indent 4. pretty) . bbGraphEdges $ graph)]
 
 -- | return predecessors
 getPredecessors :: BBGraph -> BBId -> [BBId]
