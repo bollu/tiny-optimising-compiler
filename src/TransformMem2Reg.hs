@@ -6,15 +6,7 @@ import qualified Data.Map as M
 import qualified Data.Graph as G
 import Data.Text.Prettyprint.Doc as PP
 import Debug.Trace
-import qualified Data.Text.Lazy as L
-import Data.Text.Prettyprint.Doc.Render.Text
-docToText :: Doc ann -> L.Text
-docToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
-
-docToString :: Doc ann -> String
-docToString = L.unpack . docToText
-prettyableToString :: Pretty a => a -> String
-prettyableToString  a = docToString (pretty a)
+import PrettyUtils
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
