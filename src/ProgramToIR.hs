@@ -5,6 +5,7 @@ import qualified Data.Map.Strict as M
 import Data.Traversable
 import Data.Foldable
 import Control.Monad.State.Strict
+import qualified Data.Tree as T
 
 data Builder = Builder {
   -- | The first BB that is present in the module
@@ -215,3 +216,6 @@ programToIR (Program stmts) =
     irProgramEntryBBId = entryBBId builder
   } where
       builder = execState (stmtsToInsts stmts) newBuilder
+
+
+type DominatorTree = T.Tree BBId
