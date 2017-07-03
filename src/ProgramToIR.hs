@@ -26,6 +26,7 @@ newBuilder =
     where
       mkDefaultBB = do
         bbid <- createNewBB (Label "default")
+        focusBB bbid
         -- Set the "entry" basic block so we can later give it to IRProgram
         modify (\b -> b { entryBBId = bbid })
 

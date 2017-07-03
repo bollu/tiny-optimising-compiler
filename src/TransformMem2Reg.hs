@@ -5,7 +5,16 @@ import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.Graph as G
 import Data.Text.Prettyprint.Doc as PP
+import Debug.Trace
+import qualified Data.Text.Lazy as L
+import Data.Text.Prettyprint.Doc.Render.Text
+docToText :: Doc ann -> L.Text
+docToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
 
+docToString :: Doc ann -> String
+docToString = L.unpack . docToText
+prettyableToString :: Pretty a => a -> String
+prettyableToString  a = docToString (pretty a)
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
@@ -78,18 +87,19 @@ dominfoIterate :: BBId -> -- ^Root node ID
                    (G.Vertex -> BBId) -> -- ^Graph vertex to BBId
                  DomInfo -> -- ^Previous dom info
                  DomInfo -- ^ New dom info
-dominfoIterate rootid bbgraph vtobbid dominfo =  M.mapWithKey newdom dominfo where
+dominfoIterate rootid bbgraph vtobbid prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
   -- For the root node, DomSet_iplus1(root) = root
   -- For a non-root node, DomSet_iplus1(n) = intersect (forall p \in preds(n) DomSet_i(p)) U {n}
-  newdom :: BBId -> DomSet -> DomSet
-  newdom id old = if id == rootid then old else newNonRootDom id
+  computeNewDom :: BBId -> DomSet -> DomSet
+  computeNewDom id old = if id == rootid then old else computeNewNonRootDom id
   -- compute the dom set of a node that is not the root
-  newNonRootDom :: BBId -> DomSet
-  newNonRootDom bbid = (combinePredDomSets ((getDoms . preds) bbid)) `S.union` (S.singleton bbid)
+  computeNewNonRootDom :: BBId -> DomSet
+  computeNewNonRootDom bbid = (combinePredDomSets ((getDoms . preds) bbid)) `S.union` (S.singleton bbid)
 
   -- predecessors of id
   preds :: BBId -> [BBId]
-  preds bbid = (getPredecessors bbgraph vtobbid bbid)
+  preds bbid = trace ("preds(" ++ (prettyableToString bbid) ++ ")" ++ "\n" ++ docToString (vcat . map (indent 4 . pretty) $ p) ++ "\n---\n") p where
+                p = getPredecessors bbgraph vtobbid bbid
 
   -- combine all predecessor dom sets by intersecting them
   combinePredDomSets :: [DomSet] -> DomSet
@@ -98,7 +108,7 @@ dominfoIterate rootid bbgraph vtobbid dominfo =  M.mapWithKey newdom dominfo whe
 
   -- get dominators of ids
   getDoms :: [BBId] -> [DomSet]
-  getDoms bbids = map (dominfo M.!) bbids
+  getDoms bbids = map (prevdominfo M.!) bbids
 
 
 -- Drop all elements till the list has two adjacent equal elements

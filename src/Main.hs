@@ -14,6 +14,7 @@ import TransformMem2Reg
 docToText :: Doc ann -> L.Text
 docToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
 
+{-
 docToString :: Doc ann -> String
 docToString = L.unpack . docToText
 
@@ -22,6 +23,7 @@ prettyableToText a = docToText (pretty a)
 
 prettyableToString :: Pretty a => a -> String
 prettyableToString  a = docToString (pretty a)
+-}
 
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
@@ -39,5 +41,5 @@ main = do
             putStrLn "*** IR:"
             putStrLn . prettyableToString .  programToIR $ program
             putStrLn "*** Dom info:"
-            putStrLn . docToString $ vsep (map pretty (take 10 (dominfo_ . programToIR $ program)))
+            putStrLn . docToString $ (pretty (dominfo . programToIR $ program))
 
