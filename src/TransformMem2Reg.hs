@@ -202,6 +202,7 @@ createDominatorTree_ = do
 
 
 
+-- | Construct the Dominator tree from the dominator sets and the entry BB
 constructDominatorTree :: M.Map BBId DomSet -> EntryBBId -> DomTree
 constructDominatorTree bbidToDomSet entrybb  = runReader createDominatorTree_ (DomTreeContext bbidToDomSet entrybb)
 
