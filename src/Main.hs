@@ -8,6 +8,7 @@ import System.IO
 import System.Environment
 import TransformMem2Reg
 import PrettyUtils
+import qualified Data.Map as M
 
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
@@ -27,6 +28,8 @@ main = do
             let irprogram =  programToIR program
             putStrLn . prettyableToString $ irprogram
 
+            let bbgraph = mkBBGraph . IR.irProgramBBMap $ irprogram :: BBGraph
+
             putStrLn "*** Dom info:"
             let dominatorInfo = constructBBDominators irprogram
             putStrLn . docToString . pretty $ dominatorInfo
@@ -34,4 +37,14 @@ main = do
             putStrLn "*** Dominator tree: "
             let dominatorTree = constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
             putStrLn . prettyableToString $ dominatorTree
+
+            putStrLn "*** Children of domtree node: "
+            let domsubtree = fmap (\bbid -> (bbid, domTreeSubtree dominatorTree bbid))
+                                    (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
+            putStrLn . docToString $ vcat (fmap pretty domsubtree)
+
+            putStrLn "*** Dominance Frontiers: "
+            let domfrontiers = fmap (\bbid -> (bbid, getDominanceFrontier dominatorTree bbgraph bbid))
+                                    (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
+            putStrLn . docToString $ vcat (fmap pretty domfrontiers)
 

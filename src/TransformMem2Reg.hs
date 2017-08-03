@@ -1,8 +1,14 @@
-module TransformMem2Reg(constructDominatorTree, BBGraph(..), constructBBDominators) where
+module TransformMem2Reg(constructDominatorTree,
+    BBGraph(..),
+    mkBBGraph,
+    constructBBDominators,
+    domTreeSubtree,
+    getDominanceFrontier) where
 {-# LANGUAGE TupleSections #-}
 
 import IR
 import Data.Tree
+import Data.List(nub)
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Text.Prettyprint.Doc as PP
@@ -16,7 +22,7 @@ import qualified Data.Monoid as Monoid
 newtype BBGraph = BBGraph { bbGraphEdges :: [(BBId, BBId)] }
 
 instance Pretty BBGraph where
-  pretty graph = 
+  pretty graph =
     vcat [pretty "BB graph edges",
           (vcat . map (indent 4. pretty) . bbGraphEdges $ graph)]
 
@@ -184,7 +190,7 @@ foldMapM ta mfn = foldM (\monoid a -> (monoid Monoid.<>) <$> (mfn a)) mempty ta
 newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }
 
 instance Pretty DomTree where
-  pretty graph = 
+  pretty graph =
     vcat [pretty "dom tree edges: ",
           (vcat . map (indent 4. pretty) . domTreeEdges $ graph)]
 
@@ -205,4 +211,41 @@ createDominatorTree_ = do
 -- | Construct the Dominator tree from the dominator sets and the entry BB
 constructDominatorTree :: M.Map BBId DomSet -> EntryBBId -> DomTree
 constructDominatorTree bbidToDomSet entrybb  = runReader createDominatorTree_ (DomTreeContext bbidToDomSet entrybb)
+
+-- | Returns the children of an element in a dom tree
+-- | This returns only the immediate children.
+domTreeChildren :: DomTree -> BBId -> [BBId]
+domTreeChildren (DomTree domedges) a = [dest | (src, dest) <- domedges, src==a]
+
+-- | Return the entire subtree of a node
+domTreeSubtree :: DomTree -> BBId -> [BBId]
+domTreeSubtree tree@(DomTree edges) a =
+  a:(curChilds >>= (domTreeSubtree tree)) where
+  curChilds :: [BBId]
+  curChilds = domTreeChildren tree a
+
+
+-- | Return the set of vertices in DomTree
+vertices :: DomTree -> [BBId]
+vertices (DomTree edges) = nub (map fst edges ++ map snd edges)
+
+-- | The `dominates` relation. Given two BB Ids, returns whether `a` dominates `b`
+dominates :: DomTree -> BBId -> BBId -> Bool
+dominates tree a b = b `elem` (domTreeSubtree tree a)
+
+-- | Strictly dominates relation. `A` strictlyDom `B` iff `A` Dom `B` and `A` /= `B`
+strictlyDominates :: DomTree -> BBId -> BBId -> Bool
+strictlyDominates domtree a b = dominates domtree a b && a /= b
+
+-- | Get the list of dominance frontiers of a given BB
+-- | "The dominance frontier of a node d is the set of all nodes n such that d
+-- |  dominates an immediate predecessor of n, but d does not strictly dominate
+-- |  n. It is the set of nodes where d's dominance stops."
+-- | TODO: think anbout why *an immediate preceseeor*, not *all immediate ...*.
+getDominanceFrontier :: DomTree -> BBGraph -> BBId -> [BBId]
+getDominanceFrontier tree@(DomTree domedges) cfg cur =
+  [bb | bb <- vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] where
+  preds bb = trace (predsStr bb) (getPredecessors cfg bb)
+  predsStr bb = docToString $ pretty "preds: " <+> braces (pretty bb) <+> pretty  (getPredecessors cfg bb)
+
 

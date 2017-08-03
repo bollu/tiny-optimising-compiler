@@ -27,8 +27,8 @@ data Inst  where
   InstMul :: Value -> Value -> Inst
   InstL :: Value -> Value -> Inst
   InstAnd :: Value -> Value -> Inst
-  InstLoad :: Value -> Inst 
-  InstStore :: Value -> Value -> Inst 
+  InstLoad :: Value -> Inst
+  InstStore :: Value -> Value -> Inst
   InstPhi :: NE.NonEmpty (BBId, Value) -> Inst
 
 instance Pretty Inst where
@@ -40,7 +40,7 @@ instance Pretty Inst where
   pretty (InstLoad op) = pretty "load" <+> pretty op
   pretty (InstStore slot val) = pretty "store" <+> pretty val <+>
                                 pretty "in" <+> pretty slot
-  pretty (InstPhi philist) = 
+  pretty (InstPhi philist) =
     hcat (punctuate comma (NE.toList (fmap (\(bbid, val) ->
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
@@ -67,17 +67,17 @@ defaultBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
 
 -- TODO: replace nest with indent
 instance Pretty BasicBlock where
-  pretty (BasicBlock insts ret label) = 
+  pretty (BasicBlock insts ret label) =
     nest 4 (vsep ([pretty label <> pretty ":"] ++ body)) where
       body = map pretty insts ++ [pretty ret]
 
 
 -- | Return instructions are the only ones that can cause control flow
 -- | between one basic block to another.
-data RetInst = 
+data RetInst =
   RetInstConditionalBranch Value BBId BBId |
-  RetInstBranch BBId | 
-  RetInstTerminal 
+  RetInstBranch BBId |
+  RetInstTerminal
 
 instance Pretty RetInst where
   pretty (RetInstTerminal) = pretty "TERMINAL"
