@@ -2,7 +2,7 @@ module TransformMem2Reg(constructDominatorTree,
     CFG(..),
     mkBBGraph,
     constructBBDominators,
-    domTreeSubtree,
+    getAllChildren,
     getDominanceFrontier) where
 {-# LANGUAGE TupleSections #-}
 
@@ -18,17 +18,35 @@ import Control.Monad.Reader
 import Data.Traversable
 import qualified Data.Monoid as Monoid
 
--- | The control flow graph, in adjacency list representation
-newtype CFG = CFG { cfgEdges :: [(BBId, BBId)] }
+-- | Represents a graph with `a` as a vertex ID type
+newtype Graph a = Graph { edges :: [(a, a)] }
 
-instance Pretty CFG where
+-- | The control flow graph, which is a graph of basic blocks
+type CFG = Graph BBId
+
+instance Pretty a => Pretty (Graph a) where
   pretty graph =
     vcat [pretty "BB graph edges",
-          (vcat . map (indent 4. pretty) . cfgEdges $ graph)]
+          (vcat . map (indent 4 . pretty) . edges $ graph)]
 
--- | return predecessors
-getPredecessors :: CFG -> BBId -> [BBId]
-getPredecessors cfg bbid = [ src | (src, sink) <-(cfgEdges cfg), sink == bbid]
+-- | return predecessors of a node
+getPredecessors :: Eq a => Graph a -> a -> [a]
+getPredecessors g bbid = [ src | (src, sink) <- (edges g), sink == bbid]
+
+-- | Returns the children of an element in a dom tree
+-- | This returns only the immediate children.
+getImmediateChildren :: Eq a => Graph a -> a -> [a]
+getImmediateChildren (Graph edges) a = [dest | (src, dest) <- edges, src==a]
+
+-- | Return all the vertices of the subgraph
+getAllChildren :: Eq a => Graph a -> a -> [a]
+getAllChildren tree@(Graph edges) a =
+  a:(curChilds >>= (getAllChildren tree)) where
+  curChilds = getImmediateChildren tree a
+
+-- | Return the set of vertices in DomTree
+vertices :: Eq a => Graph a  -> [a]
+vertices (Graph edges) = nub (map fst edges ++ map snd edges)
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
@@ -37,7 +55,7 @@ getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
 mkBBGraph :: M.Map BBId BasicBlock -> CFG
-mkBBGraph bbMap = CFG (M.foldMapWithKey makeEdges bbMap)  where
+mkBBGraph bbMap = Graph (M.foldMapWithKey makeEdges bbMap)  where
 
     -- Make the edges corresponding to basic block.
     makeEdges :: BBId -> BasicBlock -> [(BBId, BBId)]
@@ -187,12 +205,8 @@ getImmediateDominator bbid = do
 foldMapM :: (Foldable t, Monad m, Monoid r) => t a -> (a -> m r) -> m r
 foldMapM ta mfn = foldM (\monoid a -> (monoid Monoid.<>) <$> (mfn a)) mempty ta
 
-newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }
-
-instance Pretty DomTree where
-  pretty graph =
-    vcat [pretty "dom tree edges: ",
-          (vcat . map (indent 4. pretty) . domTreeEdges $ graph)]
+-- newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }
+type DomTree = Graph BBId
 
 -- | internal reader that is not exported
 createDominatorTree_ :: Reader DomTreeContext DomTree
@@ -203,7 +217,7 @@ createDominatorTree_ = do
                               case mIdom of
                                 Just idom -> return [(idom, bb)]
                                 Nothing -> return [])
-  return $ DomTree idoms
+  return $ Graph idoms
 
 
 
@@ -212,26 +226,12 @@ createDominatorTree_ = do
 constructDominatorTree :: M.Map BBId DomSet -> EntryBBId -> DomTree
 constructDominatorTree bbidToDomSet entrybb  = runReader createDominatorTree_ (DomTreeContext bbidToDomSet entrybb)
 
--- | Returns the children of an element in a dom tree
--- | This returns only the immediate children.
-domTreeChildren :: DomTree -> BBId -> [BBId]
-domTreeChildren (DomTree domedges) a = [dest | (src, dest) <- domedges, src==a]
-
--- | Return the entire subtree of a node
-domTreeSubtree :: DomTree -> BBId -> [BBId]
-domTreeSubtree tree@(DomTree edges) a =
-  a:(curChilds >>= (domTreeSubtree tree)) where
-  curChilds :: [BBId]
-  curChilds = domTreeChildren tree a
 
 
--- | Return the set of vertices in DomTree
-vertices :: DomTree -> [BBId]
-vertices (DomTree edges) = nub (map fst edges ++ map snd edges)
 
 -- | The `dominates` relation. Given two BB Ids, returns whether `a` dominates `b`
 dominates :: DomTree -> BBId -> BBId -> Bool
-dominates tree a b = b `elem` (domTreeSubtree tree a)
+dominates tree a b = b `elem` (getAllChildren tree a)
 
 -- | Strictly dominates relation. `A` strictlyDom `B` iff `A` Dom `B` and `A` /= `B`
 strictlyDominates :: DomTree -> BBId -> BBId -> Bool
@@ -243,7 +243,7 @@ strictlyDominates domtree a b = dominates domtree a b && a /= b
 -- |  n. It is the set of nodes where d's dominance stops."
 -- | TODO: think anbout why *an immediate preceseeor*, not *all immediate ...*.
 getDominanceFrontier :: DomTree -> CFG -> BBId -> [BBId]
-getDominanceFrontier tree@(DomTree domedges) cfg cur =
+getDominanceFrontier tree@(Graph domedges) cfg cur =
   [bb | bb <- vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] where
   preds bb = trace (predsStr bb) (getPredecessors cfg bb)
   predsStr bb = docToString $ pretty "preds: " <+> braces (pretty bb) <+> pretty  (getPredecessors cfg bb)

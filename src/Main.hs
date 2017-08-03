@@ -38,11 +38,6 @@ main = do
             let dominatorTree = constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
             putStrLn . prettyableToString $ dominatorTree
 
-            putStrLn "*** Children of domtree node: "
-            let domsubtree = fmap (\bbid -> (bbid, domTreeSubtree dominatorTree bbid))
-                                    (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
-            putStrLn . docToString $ vcat (fmap pretty domsubtree)
-
             putStrLn "*** Dominance Frontiers: "
             let domfrontiers = fmap (\bbid -> (bbid, getDominanceFrontier dominatorTree cfg bbid))
                                     (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
