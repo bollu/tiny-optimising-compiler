@@ -28,7 +28,7 @@ main = do
             let irprogram =  programToIR program
             putStrLn . prettyableToString $ irprogram
 
-            let bbgraph = mkBBGraph . IR.irProgramBBMap $ irprogram :: BBGraph
+            let cfg = mkBBGraph . IR.irProgramBBMap $ irprogram :: CFG
 
             putStrLn "*** Dom info:"
             let dominatorInfo = constructBBDominators irprogram
@@ -44,7 +44,7 @@ main = do
             putStrLn . docToString $ vcat (fmap pretty domsubtree)
 
             putStrLn "*** Dominance Frontiers: "
-            let domfrontiers = fmap (\bbid -> (bbid, getDominanceFrontier dominatorTree bbgraph bbid))
+            let domfrontiers = fmap (\bbid -> (bbid, getDominanceFrontier dominatorTree cfg bbid))
                                     (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
             putStrLn . docToString $ vcat (fmap pretty domfrontiers)
 

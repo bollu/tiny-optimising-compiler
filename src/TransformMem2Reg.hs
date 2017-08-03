@@ -1,5 +1,5 @@
 module TransformMem2Reg(constructDominatorTree,
-    BBGraph(..),
+    CFG(..),
     mkBBGraph,
     constructBBDominators,
     domTreeSubtree,
@@ -18,17 +18,17 @@ import Control.Monad.Reader
 import Data.Traversable
 import qualified Data.Monoid as Monoid
 
--- | adjacency list representation
-newtype BBGraph = BBGraph { bbGraphEdges :: [(BBId, BBId)] }
+-- | The control flow graph, in adjacency list representation
+newtype CFG = CFG { cfgEdges :: [(BBId, BBId)] }
 
-instance Pretty BBGraph where
+instance Pretty CFG where
   pretty graph =
     vcat [pretty "BB graph edges",
-          (vcat . map (indent 4. pretty) . bbGraphEdges $ graph)]
+          (vcat . map (indent 4. pretty) . cfgEdges $ graph)]
 
 -- | return predecessors
-getPredecessors :: BBGraph -> BBId -> [BBId]
-getPredecessors bbgraph bbid = [ src | (src, sink) <-(bbGraphEdges bbgraph), sink == bbid]
+getPredecessors :: CFG -> BBId -> [BBId]
+getPredecessors cfg bbid = [ src | (src, sink) <-(cfgEdges cfg), sink == bbid]
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
@@ -36,8 +36,8 @@ getBBSuccessors (BasicBlock { bbRetInst = RetInstTerminal}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
-mkBBGraph :: M.Map BBId BasicBlock -> BBGraph
-mkBBGraph bbMap = BBGraph (M.foldMapWithKey makeEdges bbMap)  where
+mkBBGraph :: M.Map BBId BasicBlock -> CFG
+mkBBGraph bbMap = CFG (M.foldMapWithKey makeEdges bbMap)  where
 
     -- Make the edges corresponding to basic block.
     makeEdges :: BBId -> BasicBlock -> [(BBId, BBId)]
@@ -85,10 +85,10 @@ initialBBIdToDomSet entryid ids = M.fromList (mapEntry:mapAllExceptEntry) where
 -- Get the predecessors of 'BBId' in 'Graph'
 
 dominfoIterate :: EntryBBId -> -- ^Entry node ID
-                 BBGraph -> -- ^Graph of BBs
+                 CFG -> -- ^Graph of BBs
                  BBIdToDomSet -> -- ^Previous dom info
                  BBIdToDomSet -- ^ New dom info
-dominfoIterate entryid bbgraph prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
+dominfoIterate entryid cfg prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
   -- For the root node, DomSet_iplus1(root) = root
   -- For a non-root node, DomSet_iplus1(n) = intersect (forall p \in preds(n) DomSet_i(p)) U {n}
   computeNewDom :: BBId -> DomSet -> DomSet
@@ -99,7 +99,7 @@ dominfoIterate entryid bbgraph prevdominfo =  M.mapWithKey computeNewDom prevdom
 
   -- predecessors of id
   preds :: BBId -> [BBId]
-  preds bbid = getPredecessors bbgraph bbid
+  preds bbid = getPredecessors cfg bbid
 
   -- combine all predecessor dom sets by intersecting them
   combinePredDomSets :: [DomSet] -> DomSet
@@ -118,11 +118,11 @@ constructBBDominators :: IRProgram -> BBIdToDomSet
 constructBBDominators program = getFirstAdjacentEqual iterations where
     -- iterations of domInfoIterate applied
     iterations :: [BBIdToDomSet]
-    iterations = iterate (dominfoIterate entryid bbgraph) initdominfo
+    iterations = iterate (dominfoIterate entryid cfg) initdominfo
 
     -- graph structure
-    bbgraph :: BBGraph
-    bbgraph =  mkBBGraph (irProgramBBMap program)
+    cfg :: CFG
+    cfg =  mkBBGraph (irProgramBBMap program)
 
     -- seed constructBBDominators
     initdominfo :: BBIdToDomSet
@@ -242,10 +242,37 @@ strictlyDominates domtree a b = dominates domtree a b && a /= b
 -- |  dominates an immediate predecessor of n, but d does not strictly dominate
 -- |  n. It is the set of nodes where d's dominance stops."
 -- | TODO: think anbout why *an immediate preceseeor*, not *all immediate ...*.
-getDominanceFrontier :: DomTree -> BBGraph -> BBId -> [BBId]
+getDominanceFrontier :: DomTree -> CFG -> BBId -> [BBId]
 getDominanceFrontier tree@(DomTree domedges) cfg cur =
   [bb | bb <- vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] where
   preds bb = trace (predsStr bb) (getPredecessors cfg bb)
   predsStr bb = docToString $ pretty "preds: " <+> braces (pretty bb) <+> pretty  (getPredecessors cfg bb)
 
+
+-- Get the names of all values allocated in a basic block
+getBBAllocs :: BasicBlock -> [Label Inst]
+getBBAllocs (BasicBlock{bbInsts=bbInsts}) =
+  bbInsts >>= \(Named name inst) -> case inst of
+                                        InstAlloc -> [name]
+                                        _ -> []
+
+
+-- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
+replaceLoadStore :: CFG -> DomTree -> M.Map BBId BasicBlock -> M.Map BBId BasicBlock
+replaceLoadStore cfg domtree bbmap' = undefined
+
+transformMem2Reg :: IRProgram -> IRProgram
+transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
+                           irProgramEntryBBId=entrybbid} =
+  IRProgram {irProgramBBMap=bbmap', irProgramEntryBBId=entrybbid} where
+  cfg :: CFG
+  cfg =  mkBBGraph bbmap
+
+  bbIdToDomSet :: BBIdToDomSet
+  bbIdToDomSet = constructBBDominators program
+
+  domtree :: DomTree
+  domtree = constructDominatorTree bbIdToDomSet entrybbid
+
+  bbmap' = replaceLoadStore cfg domtree bbmap'
 
