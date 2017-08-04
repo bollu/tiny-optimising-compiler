@@ -311,12 +311,13 @@ mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
 
 -- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
 placePhiNodes_ :: CFG -> DomTree -> M.Map BBId BasicBlock -> M.Map BBId BasicBlock
-placePhiNodes_ cfg domtree bbmap' = undefined where
-  bbIdToAllocNames :: M.Map BBId [Label Inst]
-  bbIdToAllocNames = fmap getBBAllocs bbmap'
+placePhiNodes_ cfg domtree initbbmap =
+    M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap allocNamesToBBIds  where
+      bbIdToAllocNames :: M.Map BBId [Label Inst]
+      bbIdToAllocNames = fmap getBBAllocs initbbmap
 
-  allocNamesToBBs :: M.Map (Label Inst) [BBId]
-  allocNamesToBBs = undefined
+      allocNamesToBBIds :: M.Map (Label Inst) [BBId]
+      allocNamesToBBIds = mapReverse bbIdToAllocNames
 
 
 
