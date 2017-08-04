@@ -1,10 +1,11 @@
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE RecordWildCards #-}
 module TransformMem2Reg(constructDominatorTree,
     CFG(..),
     mkBBGraph,
     constructBBDominators,
     getAllChildren,
     getDominanceFrontier) where
-{-# LANGUAGE TupleSections #-}
 
 import IR
 import Data.Tree
@@ -17,6 +18,8 @@ import PrettyUtils
 import Control.Monad.Reader
 import Data.Traversable
 import qualified Data.Monoid as Monoid
+import qualified Data.Set as S
+import qualified Data.List.NonEmpty as NE
 
 -- | Represents a graph with `a` as a vertex ID type
 newtype Graph a = Graph { edges :: [(a, a)] }
@@ -245,8 +248,7 @@ strictlyDominates domtree a b = dominates domtree a b && a /= b
 getDominanceFrontier :: DomTree -> CFG -> BBId -> [BBId]
 getDominanceFrontier tree@(Graph domedges) cfg cur =
   [bb | bb <- vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] where
-  preds bb = trace (predsStr bb) (getPredecessors cfg bb)
-  predsStr bb = docToString $ pretty "preds: " <+> braces (pretty bb) <+> pretty  (getPredecessors cfg bb)
+  preds bb = (getPredecessors cfg bb)
 
 
 -- Get the names of all values allocated in a basic block
@@ -256,10 +258,68 @@ getBBAllocs (BasicBlock{bbInsts=bbInsts}) =
                                         InstAlloc -> [name]
                                         _ -> []
 
+-- | Adjust possibly many keys
+adjustWithKeys :: Ord k => (k -> a -> a) -> [k] -> M.Map k a -> M.Map k a
+adjustWithKeys f ks m = foldl (\m k -> M.adjustWithKey f k m) m ks
+
+unsafeToNonEmpty :: [a] -> NE.NonEmpty a
+unsafeToNonEmpty [] = error "unable to convert empty list to non empty"
+unsafeToNonEmpty (x:xs) = x NE.:| xs
+
+-- | For a given basic block, insert a phi node at the top
+insertPhiNodeCallback_ :: CFG -> Label Inst -> BBId -> BasicBlock -> BasicBlock
+insertPhiNodeCallback_ cfg lbl bbid bb@(BasicBlock{..}) =
+    bb {bbInsts=bbInsts'} where
+    bbInsts' :: [Named Inst]
+    bbInsts' = (lbl =:= phi):bbInsts
+
+    phi :: Inst
+    phi = InstPhi . unsafeToNonEmpty $ (zip ((getPredecessors cfg bbid)) (repeat (ValueInstRef lbl)))
+
+
+-- | Place Phi nodes for a given instruction at a set of start CFGs. Initially, they should be the
+-- |  set of nodes that store to the original value
+placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
+                          -> S.Set BBId -- ^BBs to process
+                          -> S.Set BBId -- ^BBs to be processed
+                          -> CFG -- ^The CFG of the function
+                          -> DomTree -- ^The dominator tree of the function
+                          -> M.Map BBId BasicBlock -- ^Function body
+                          -> M.Map BBId BasicBlock
+placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
+    if null (curbbs)
+    then bbmap
+    else placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap'  where
+            cur :: BBId
+            cur = S.elemAt 0 curbbs
+
+            -- | For every basic block in the dominance frontier, insert a phi node.
+            bbmap' :: M.Map BBId BasicBlock
+            bbmap' = adjustWithKeys (insertPhiNodeCallback_ cfg name) curfrontier bbmap
+
+            curbbs' :: S.Set BBId
+            curbbs' = ((S.deleteAt 0 curbbs) `S.union` (S.fromList curfrontier S.\\ processed'))
+
+            curfrontier ::  [BBId]
+            curfrontier = getDominanceFrontier domtree cfg cur
+
+            processed' :: S.Set BBId
+            processed' = (S.insert cur processed)
+
+mapReverse :: (Ord k, Ord a) => M.Map k [a] -> M.Map a [k]
+mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
 
 -- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
-replaceLoadStore :: CFG -> DomTree -> M.Map BBId BasicBlock -> M.Map BBId BasicBlock
-replaceLoadStore cfg domtree bbmap' = undefined
+placePhiNodes_ :: CFG -> DomTree -> M.Map BBId BasicBlock -> M.Map BBId BasicBlock
+placePhiNodes_ cfg domtree bbmap' = undefined where
+  bbIdToAllocNames :: M.Map BBId [Label Inst]
+  bbIdToAllocNames = fmap getBBAllocs bbmap'
+
+  allocNamesToBBs :: M.Map (Label Inst) [BBId]
+  allocNamesToBBs = undefined
+
+
+
 
 transformMem2Reg :: IRProgram -> IRProgram
 transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
@@ -274,5 +334,5 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
   domtree :: DomTree
   domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-  bbmap' = replaceLoadStore cfg domtree bbmap'
+  bbmap' = placePhiNodes_ cfg domtree bbmap'
 
