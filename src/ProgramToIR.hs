@@ -1,6 +1,6 @@
 module ProgramToIR where
 import Language
-import IR 
+import IR
 import qualified Data.Map.Strict as M
 import Data.Traversable
 import Data.Foldable
@@ -16,13 +16,15 @@ data Builder = Builder {
   bbIdToBB :: M.Map BBId BasicBlock,
   -- | counter to generate new instruction name
   tmpInstNamesCounter :: Int,
+  -- | Map from name to count of number of times name has occured
+  instNameCounter :: M.Map String Int,
   -- | Map from literal name to Value
   literalToValue :: M.Map Literal Value
 }
 
 -- | Create a new builder with an empty basic block
 newBuilder :: Builder
-newBuilder = 
+newBuilder =
   execState mkDefaultBB initbuilder
     where
       mkDefaultBB = do
@@ -36,8 +38,9 @@ newBuilder =
         currentBBId = Label "",
         bbIdToBB = M.empty,
         tmpInstNamesCounter=0,
+        instNameCounter=M.empty,
         literalToValue=mempty
-    }) 
+    })
 
 -- | Get the current Basic block ID
 getCurrentBBId :: State Builder BBId
@@ -65,6 +68,18 @@ getTempInstName = do
   modify (\b -> b { tmpInstNamesCounter=n+1 })
   return . Label $ "tmp." ++ show n
 
+getUniqueInstName :: String -> State Builder (Label Inst)
+getUniqueInstName s = do
+    counts <- gets instNameCounter
+    let instNameCounter' = M.insertWith (\_ old -> old + 1) s 0 counts
+    modify (\b -> b {instNameCounter=instNameCounter' })
+
+    let curcount = instNameCounter' M.! s
+    if curcount == 0
+    then return (Label s)
+    else return (Label (s ++ "." ++ show curcount))
+
+
 
 -- | Create a temporary name for a return instruction
 -- | Note that we cheat in the implementation, by just "relabelling"
@@ -90,7 +105,7 @@ getLiteralValueMapping lit = do
 -- | in the Builder.
 liftBBEdit :: (BasicBlock -> BasicBlock) -> Builder -> Builder
 liftBBEdit f builder = builder {
-    bbIdToBB = M.adjust f (currentBBId builder) (bbIdToBB builder) 
+    bbIdToBB = M.adjust f (currentBBId builder) (bbIdToBB builder)
 }
 
 -- | Set the builder's current basic block to the i'th basic block
@@ -103,7 +118,7 @@ setBB builder i = builder {
 -- | Append instruction "I" to the builder
 appendInst :: Named Inst -> State Builder Value
 appendInst i = do
-  modify . liftBBEdit $ (appendInstToBB i) 
+  modify . liftBBEdit $ (appendInstToBB i)
   return $ ValueInstRef (namedName i)
   where
     appendInstToBB :: Named Inst -> BasicBlock -> BasicBlock
@@ -111,7 +126,7 @@ appendInst i = do
 
 setRetInst :: RetInst -> State Builder ()
 setRetInst i = do
-  modify . liftBBEdit $ (setBBRetInst i) 
+  modify . liftBBEdit $ (setBBRetInst i)
   where
     setBBRetInst :: RetInst -> BasicBlock -> BasicBlock
     setBBRetInst i bb = bb { bbRetInst=i }
@@ -140,14 +155,14 @@ buildAssign :: Literal -> Expr' -> State Builder Value
 buildAssign lit expr = do
   exprval <- buildExpr expr
   litval <- getLiteralValueMapping lit
-  name <- getTempInstName
+  name <- getUniqueInstName $ (unLiteral lit) ++ ".store"
   -- TODO: do not allow Store to be named with type system trickery
   appendInst $ name =:= InstStore litval exprval
 
 -- | Build IR for "define x"
 buildDefine :: Literal -> State Builder Value
 buildDefine lit = do
-  name <- getTempInstName
+  name <- getUniqueInstName . unLiteral $ lit
   mapLiteralToValue lit (ValueInstRef name)
   appendInst $ name =:= InstAlloc
 
@@ -158,7 +173,7 @@ buildStmt (Assign _ lit expr) = buildAssign lit expr >> return ()
 buildStmt (If _ cond then' else') = do
   condval <- buildExpr cond
   currbb <- getCurrentBBId
-  
+
   bbthen <- createNewBB (Label "then")
   focusBB bbthen
   stmtsToInsts then'
@@ -171,14 +186,12 @@ buildStmt (If _ cond then' else') = do
   bbjoin <- createNewBB (Label "join")
 
   focusBB bbthen
-  thenjump <- getTempInstName
   setRetInst $ RetInstBranch bbjoin
 
   focusBB bbelse
   setRetInst $ RetInstBranch bbjoin
-  
+
   focusBB currbb
-  name <- getTempRetInstName
   setRetInst $ RetInstConditionalBranch condval bbthen bbelse
 
   focusBB bbjoin
@@ -210,7 +223,7 @@ stmtsToInsts stmts = (for_ stmts buildStmt)
 
 
 programToIR :: Program' -> IRProgram
-programToIR (Program stmts) = 
+programToIR (Program stmts) =
   IRProgram {
     irProgramBBMap = bbIdToBB  builder,
     irProgramEntryBBId = entryBBId builder
