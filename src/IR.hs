@@ -31,6 +31,18 @@ data Inst  where
   InstStore :: Value -> Value -> Inst
   InstPhi :: NE.NonEmpty (BBId, Value) -> Inst
 
+-- | Map over the `Value`s in an Inst
+mapInstValue :: (Value -> Value) -> Inst -> Inst
+mapInstValue _ (InstAlloc) = InstAlloc
+mapInstValue f (InstAdd lhs rhs) = InstAdd (f lhs) (f rhs)
+mapInstValue f (InstMul lhs rhs) = InstMul (f lhs) (f rhs)
+mapInstValue f (InstL lhs rhs) = InstL (f lhs) (f rhs)
+mapInstValue f (InstAnd lhs rhs) = InstAnd (f lhs) (f rhs)
+mapInstValue f (InstLoad lhs) = InstLoad (f lhs)
+mapInstValue f (InstStore lhs rhs) = InstStore (f lhs) (f rhs)
+mapInstValue _ phi@(InstPhi _) = phi
+
+
 instance Pretty Inst where
   pretty (InstAlloc) = pretty "alloc"
   pretty (InstAdd l r) = pretty "add" <+> pretty l <+> pretty r

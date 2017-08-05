@@ -349,12 +349,20 @@ renameInstsInBB :: Label Inst -- ^Old label
                  -> Label Inst -- ^New label
                  -> BasicBlock -- ^Basic Block to repalce in
                  -> BasicBlock
-renameInstsInBB l l' (bb@BasicBlock{bbInsts=bbInsts}) = bb {
+renameInstsInBB oldl newl (bb@BasicBlock{bbInsts=bbInsts}) = bb {
     bbInsts=map replaceLabel bbInsts
 } where
-    replaceLabel (Named lbl inst) = if lbl == l
-                                    then (Named l' inst)
-                                    else (Named lbl inst)
+    replaceLabel (Named lbl inst) = let lbl' = if lbl == oldl then newl else lbl
+                                    in (Named lbl'  (replaceInstRef_ inst))
+
+    -- | Replace references to label in Inst
+    replaceInstRef_ :: Inst -> Inst
+    replaceInstRef_ inst = mapInstValue replaceValueInstRef_ inst
+
+    replaceValueInstRef_ :: Value -> Value
+    replaceValueInstRef_ (ValueInstRef lbl) =
+        let lbl' = if lbl == oldl then newl else lbl in ValueInstRef lbl'
+    replaceValueInstRef_ v = v
 
 -- | Rename all instructions in the dom-set of a basic block
 renameInstsInDomSet :: Label Inst -- ^Original label
@@ -364,7 +372,7 @@ renameInstsInDomSet :: Label Inst -- ^Original label
                    -> M.Map BBId BasicBlock
                    -> M.Map BBId BasicBlock
 renameInstsInDomSet l l' bbIdToDomSet bbid bbmap =
-    adjustWithKeys renamer domset bbmap where
+    trace (docToString $  pretty "original: " <+> pretty l <+> pretty "new: " <+> pretty l' <+> pretty "in" <+> pretty (S.toList domset)) (adjustWithKeys renamer domset bbmap) where
         domset :: S.Set BBId
         domset = bbIdToDomSet M.! bbid
 
@@ -392,7 +400,7 @@ variableRename_ :: BBIdToDomSet -- ^Dom sets
                    -> M.Map BBId BasicBlock
 variableRename_ bbIdToDomSet origbbmap =
     M.foldlWithKey (\bbmap uniqlbl (oldlbl, bbid) ->
-        renameInstsInDomSet uniqlbl oldlbl bbIdToDomSet bbid bbmap) origbbmap uniquedDecls
+        renameInstsInDomSet oldlbl uniqlbl bbIdToDomSet bbid bbmap) origbbmap uniquedDecls
     where
         -- Make each BB per label point to a "unique" label.
         uniquedDecls :: M.Map (Label Inst) (Label Inst, BBId)
@@ -402,7 +410,7 @@ variableRename_ bbIdToDomSet origbbmap =
         declBBIds = getVarDeclBBIds origbbmap
 
         mkNewLabel :: Int -> Label Inst ->  Label Inst
-        mkNewLabel i l = Label (unLabel l ++ "." ++ show i)
+        mkNewLabel i l = Label ("phi." ++ unLabel l ++ "." ++ show i)
 
 
 transformMem2Reg :: IRProgram -> IRProgram
@@ -418,5 +426,5 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
   domtree :: DomTree
   domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-  bbmap' = placePhiNodes_ cfg domtree bbmap
+  bbmap' = (variableRename_ bbIdToDomSet) . (placePhiNodes_ cfg domtree) $ bbmap
 
