@@ -5,7 +5,8 @@ module TransformMem2Reg(constructDominatorTree,
     mkBBGraph,
     constructBBDominators,
     getAllChildren,
-    getDominanceFrontier) where
+    getDominanceFrontier,
+    transformMem2Reg) where
 
 import IR
 import Data.Tree
@@ -252,14 +253,15 @@ getDominanceFrontier tree@(Graph domedges) cfg cur =
 
 
 -- Get the names of all values allocated in a basic block
-getBBAllocs :: BasicBlock -> [Label Inst]
-getBBAllocs (BasicBlock{bbInsts=bbInsts}) =
+getBBVarUses :: BasicBlock -> [Label Inst]
+getBBVarUses (BasicBlock{bbInsts=bbInsts}) =
   bbInsts >>= \(Named name inst) -> case inst of
                                         InstAlloc -> [name]
+                                        InstStore (ValueInstRef slot) _ -> [slot]
                                         _ -> []
 
 -- | Adjust possibly many keys
-adjustWithKeys :: Ord k => (k -> a -> a) -> [k] -> M.Map k a -> M.Map k a
+adjustWithKeys :: (Ord k, Foldable t) => (k -> a -> a) -> t k -> M.Map k a -> M.Map k a
 adjustWithKeys f ks m = foldl (\m k -> M.adjustWithKey f k m) m ks
 
 unsafeToNonEmpty :: [a] -> NE.NonEmpty a
@@ -281,7 +283,7 @@ insertPhiNodeCallback_ cfg lbl bbid bb@(BasicBlock{..}) =
 -- |  set of nodes that store to the original value
 placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
                           -> S.Set BBId -- ^BBs to process
-                          -> S.Set BBId -- ^BBs to be processed
+                          -> S.Set BBId -- ^BBs that are already processed
                           -> CFG -- ^The CFG of the function
                           -> DomTree -- ^The dominator tree of the function
                           -> M.Map BBId BasicBlock -- ^Function body
@@ -289,22 +291,24 @@ placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
 placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
     if null (curbbs)
     then bbmap
-    else placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap'  where
-            cur :: BBId
-            cur = S.elemAt 0 curbbs
+    else trace
+              (docToString $ pretty "replacing: " <+> pretty name <+> pretty "cur: " <+> pretty cur<+> pretty "curlist:" <+> pretty (S.toList curbbs))
+              (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
+                cur :: BBId
+                cur = S.elemAt 0 curbbs
 
-            -- | For every basic block in the dominance frontier, insert a phi node.
-            bbmap' :: M.Map BBId BasicBlock
-            bbmap' = adjustWithKeys (insertPhiNodeCallback_ cfg name) curfrontier bbmap
+                -- | For every basic block in the dominance frontier, insert a phi node.
+                bbmap' :: M.Map BBId BasicBlock
+                bbmap' = adjustWithKeys (insertPhiNodeCallback_ cfg name) curfrontier bbmap
 
-            curbbs' :: S.Set BBId
-            curbbs' = ((S.deleteAt 0 curbbs) `S.union` (S.fromList curfrontier S.\\ processed'))
+                curbbs' :: S.Set BBId
+                curbbs' = (curbbs `S.union` curfrontier) S.\\ processed'
 
-            curfrontier ::  [BBId]
-            curfrontier = getDominanceFrontier domtree cfg cur
+                curfrontier ::  S.Set BBId
+                curfrontier = (S.fromList $ getDominanceFrontier domtree cfg cur) S.\\ processed
 
-            processed' :: S.Set BBId
-            processed' = (S.insert cur processed)
+                processed' :: S.Set BBId
+                processed' = (S.insert cur processed)
 
 mapReverse :: (Ord k, Ord a) => M.Map k [a] -> M.Map a [k]
 mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
@@ -312,12 +316,17 @@ mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
 -- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
 placePhiNodes_ :: CFG -> DomTree -> M.Map BBId BasicBlock -> M.Map BBId BasicBlock
 placePhiNodes_ cfg domtree initbbmap =
-    M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap allocNamesToBBIds  where
-      bbIdToAllocNames :: M.Map BBId [Label Inst]
-      bbIdToAllocNames = fmap getBBAllocs initbbmap
+    trace debugstr (M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap usesToBBIds)  where
+      bbIdToUses :: M.Map BBId [Label Inst]
+      bbIdToUses = fmap getBBVarUses initbbmap
 
-      allocNamesToBBIds :: M.Map (Label Inst) [BBId]
-      allocNamesToBBIds = mapReverse bbIdToAllocNames
+      usesToBBIds :: M.Map (Label Inst) [BBId]
+      usesToBBIds = mapReverse bbIdToUses
+
+      debugstr = docToString $ vcat [pretty "usesToBBIds: ",
+                                     pretty usesToBBIds,
+                                     pretty "bbIdsToUses: ",
+                                     pretty bbIdToUses]
 
 
 
@@ -335,5 +344,5 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
   domtree :: DomTree
   domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-  bbmap' = placePhiNodes_ cfg domtree bbmap'
+  bbmap' = placePhiNodes_ cfg domtree bbmap
 

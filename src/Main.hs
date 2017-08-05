@@ -43,3 +43,8 @@ main = do
                                     (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
             putStrLn . docToString $ vcat (fmap pretty domfrontiers)
 
+
+            putStrLn "*** Mem2Reg ***"
+            let mem2regprog = transformMem2Reg irprogram
+            putStrLn . prettyableToString $ mem2regprog
+

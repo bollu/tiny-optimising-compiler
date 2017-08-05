@@ -41,7 +41,7 @@ instance Pretty Inst where
   pretty (InstStore slot val) = pretty "store" <+> pretty val <+>
                                 pretty "in" <+> pretty slot
   pretty (InstPhi philist) =
-    hcat (punctuate comma (NE.toList (fmap (\(bbid, val) ->
+    pretty "Phi: " <+> hcat (punctuate comma (NE.toList (fmap (\(bbid, val) ->
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
 -- | Represents @a that is optionally named by a @Label a
