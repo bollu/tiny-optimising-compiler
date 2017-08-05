@@ -36,9 +36,9 @@ off is presented between simplicity and performance, I will pick simplicity.
 
 - [x] Parse
 - [x] Generate non-SSA IR
-- [x] Convert non-SSA to SSA
-- [x] generate LLVM for SSA IR
-- [x] generate MIPS assembly
+- [x] Convert non-SSA to SSA (Half done)
+- [ ] generate LLVM for SSA IR (Can be pulled from [simplexhc](http://github.com/bollu/simplexhc))
+- [ ] generate MIPS assembly
 
 At this point, we have a "functioning" compiler. Now, we can extend the 
 compiler or the language. I want to show off optimisations, so I will spend
