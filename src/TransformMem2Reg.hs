@@ -305,7 +305,7 @@ placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
                 curbbs' = (curbbs `S.union` curfrontier) S.\\ processed'
 
                 curfrontier ::  S.Set BBId
-                curfrontier = (S.fromList $ getDominanceFrontier domtree cfg cur) S.\\ processed
+                curfrontier = (S.fromList $ getDominanceFrontier domtree cfg cur) S.\\ processed'
 
                 processed' :: S.Set BBId
                 processed' = (S.insert cur processed)
