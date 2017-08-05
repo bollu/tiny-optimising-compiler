@@ -25,11 +25,10 @@ At that point, we can generate LLVM with the phi nodes.
 - Show off real world optimisations.
 
 #### Non goals
-Be the fastest compiler, or the compiler that shows the correct way of
-doing a lot of things, in the sense of "technically". I might pick the
-slower algorithm to compute something like a dominator tree, because it is
-not the point. The point is the _idea_ of the dominator tree. When a trade 
-off is presented between simplicity and performance, I will pick simplicity.
+Shows the correct way of doing a lot of things, in the sense of "engineering". I
+might pick the slower algorithm to compute a dominator tree, because I wish to
+emphasize the _idea_ of the dominator tree. When a trade off is presented
+between simplicity and performance, I will pick simplicity.
 
 
 #### Timeline

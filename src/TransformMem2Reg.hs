@@ -1,5 +1,6 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module TransformMem2Reg(constructDominatorTree,
     CFG(..),
     mkBBGraph,
@@ -264,6 +265,7 @@ getBBVarUses (BasicBlock{bbInsts=bbInsts}) =
 adjustWithKeys :: (Ord k, Foldable t) => (k -> a -> a) -> t k -> M.Map k a -> M.Map k a
 adjustWithKeys f ks m = foldl (\m k -> M.adjustWithKey f k m) m ks
 
+
 unsafeToNonEmpty :: [a] -> NE.NonEmpty a
 unsafeToNonEmpty [] = error "unable to convert empty list to non empty"
 unsafeToNonEmpty (x:xs) = x NE.:| xs
@@ -328,7 +330,79 @@ placePhiNodes_ cfg domtree initbbmap =
                                      pretty "bbIdsToUses: ",
                                      pretty bbIdToUses]
 
+-- | Find wherever this variable is "declared". An Alloca or a Phi node is considered a declare
+getVarDeclBBIds :: M.Map BBId BasicBlock -> M.Map (Label Inst) [BBId]
+getVarDeclBBIds bbs = M.fromListWith (++) $ do
+    (k :: BBId , bb) <- M.toList bbs
+    inst <- bbInsts bb
+    guard $ isDeclInst_ inst
 
+    return (namedName inst, [k])
+    where
+        isDeclInst_ :: Named Inst  -> Bool
+        isDeclInst_ (Named instname inst) = case inst of
+                                                InstAlloc -> True
+                                                InstPhi _ -> True
+                                                _ -> False
+-- | Rename all instructions in a basic block
+renameInstsInBB :: Label Inst -- ^Old label
+                 -> Label Inst -- ^New label
+                 -> BasicBlock -- ^Basic Block to repalce in
+                 -> BasicBlock
+renameInstsInBB l l' (bb@BasicBlock{bbInsts=bbInsts}) = bb {
+    bbInsts=map replaceLabel bbInsts
+} where
+    replaceLabel (Named lbl inst) = if lbl == l
+                                    then (Named l' inst)
+                                    else (Named lbl inst)
+
+-- | Rename all instructions in the dom-set of a basic block
+renameInstsInDomSet :: Label Inst -- ^Original label
+                   -> Label Inst -- ^New label
+                   -> BBIdToDomSet -- ^Dominator sets
+                   -> BBId -- ^ID to BB to start from
+                   -> M.Map BBId BasicBlock
+                   -> M.Map BBId BasicBlock
+renameInstsInDomSet l l' bbIdToDomSet bbid bbmap =
+    adjustWithKeys renamer domset bbmap where
+        domset :: S.Set BBId
+        domset = bbIdToDomSet M.! bbid
+
+        renamer :: BBId -> BasicBlock -> BasicBlock
+        renamer _ bb = renameInstsInBB l l' bb
+
+
+-- | Take a map and create a unique mapping from a key to each value.
+-- | Hold the old key in the place where the new key maps to
+-- | Take a map and create a unique mapping from a key to each value
+uniquifyKeys :: Ord k => (Int -> k -> k) -> M.Map k [a] -> M.Map k (k, a)
+uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m where
+    uniqifyPerKey_ :: (Int -> k -> k) -> k -> [a] -> [(k, (k, a))]
+    uniqifyPerKey_ uniqf k as = foldMap (uniqifyPerKeyVal_ uniqf k) (zip [1..] as)
+
+    uniqifyPerKeyVal_ :: (Int -> k -> k) -> k -> (Int, a) -> [(k, (k, a))]
+    uniqifyPerKeyVal_ uniqf k (i, a) =  [(uniqf i k, (k, a))]
+
+
+
+
+-- | Rename variables to be unique in the function.
+variableRename_ :: BBIdToDomSet -- ^Dom sets
+                   -> M.Map BBId BasicBlock -- ^Function
+                   -> M.Map BBId BasicBlock
+variableRename_ bbIdToDomSet origbbmap =
+    M.foldlWithKey (\bbmap uniqlbl (oldlbl, bbid) ->
+        renameInstsInDomSet uniqlbl oldlbl bbIdToDomSet bbid bbmap) origbbmap uniquedDecls
+    where
+        -- Make each BB per label point to a "unique" label.
+        uniquedDecls :: M.Map (Label Inst) (Label Inst, BBId)
+        uniquedDecls = uniquifyKeys  mkNewLabel declBBIds
+
+        declBBIds :: M.Map (Label Inst) [BBId]
+        declBBIds = getVarDeclBBIds origbbmap
+
+        mkNewLabel :: Int -> Label Inst ->  Label Inst
+        mkNewLabel i l = Label (unLabel l ++ "." ++ show i)
 
 
 transformMem2Reg :: IRProgram -> IRProgram
