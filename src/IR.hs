@@ -23,6 +23,7 @@ instance Pretty Value where
 
 -- | Instructions that we allow within a basic block.
 data Inst  where
+  InstValRef :: Value -> Inst
   InstAlloc :: Inst
   InstAdd :: Value -> Value -> Inst
   InstMul :: Value -> Value -> Inst
@@ -45,6 +46,7 @@ mapInstValue _ phi@(InstPhi _) = phi
 
 
 instance Pretty Inst where
+  pretty (InstValRef ref) = pretty "ref" <+> pretty ref
   pretty (InstAlloc) = pretty "alloc"
   pretty (InstAdd l r) = pretty "add" <+> pretty l <+> pretty r
   pretty (InstMul l r) = pretty "mul" <+> pretty l <+> pretty r
