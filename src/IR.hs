@@ -1,16 +1,19 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
 import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
+import Data.Functor.Identity
 
 data SSA
 data NotSSA
 
 -- | A label that uses the phantom @a as a type based discriminator
-data Label a = Label { unLabel ::  String } deriving(Eq, Ord, Functor)
+data Label a = Label { unLabel ::  String } deriving(Eq, Ord, Functor, Foldable, Traversable)
 instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
@@ -35,14 +38,18 @@ data Inst  where
 
 -- | Map over the `Value`s in an Inst
 mapInstValue :: (Value -> Value) -> Inst -> Inst
-mapInstValue _ (InstAlloc) = InstAlloc
-mapInstValue f (InstAdd lhs rhs) = InstAdd (f lhs) (f rhs)
-mapInstValue f (InstMul lhs rhs) = InstMul (f lhs) (f rhs)
-mapInstValue f (InstL lhs rhs) = InstL (f lhs) (f rhs)
-mapInstValue f (InstAnd lhs rhs) = InstAnd (f lhs) (f rhs)
-mapInstValue f (InstLoad lhs) = InstLoad (f lhs)
-mapInstValue f (InstStore lhs rhs) = InstStore (f lhs) (f rhs)
-mapInstValue _ phi@(InstPhi _) = phi
+mapInstValue f inst = runIdentity $ forInstValue (Identity . f) inst
+
+-- | Run an effect `f` over the values of an instruction
+forInstValue :: Applicative m => (Value -> m Value) -> Inst -> m Inst
+forInstValue _ (InstAlloc) = pure InstAlloc
+forInstValue f (InstAdd lhs rhs) = InstAdd <$> (f lhs) <*> (f rhs)
+forInstValue f (InstMul lhs rhs) = InstMul <$> (f lhs) <*> (f rhs)
+forInstValue f (InstL lhs rhs) = InstL <$> (f lhs) <*> (f rhs)
+forInstValue f (InstAnd lhs rhs) = InstAnd <$> (f lhs) <*> (f rhs)
+forInstValue f (InstLoad lhs) = InstLoad <$> f lhs
+forInstValue f (InstStore lhs rhs) = InstAnd <$> (f lhs) <*> (f rhs)
+forInstValue _ phi@(InstPhi _) = pure phi
 
 
 instance Pretty Inst where
@@ -60,7 +67,7 @@ instance Pretty Inst where
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
 -- | Represents @a that is optionally named by a @Label a
-data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor)
+data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable)
 
 
 -- | Infix operator for @Named constructor
