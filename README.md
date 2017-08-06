@@ -35,7 +35,7 @@ between simplicity and performance, I will pick simplicity.
 
 - [x] Parse
 - [x] Generate non-SSA IR
-- [x] Convert non-SSA to SSA (Half done)
+- [x] Convert non-SSA to SSA (`Mem2Reg` is the pass where this happens.)
 - [ ] generate LLVM for SSA IR (Can be pulled from [simplexhc](http://github.com/bollu/simplexhc))
 - [ ] generate MIPS assembly
 
