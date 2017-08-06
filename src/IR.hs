@@ -4,7 +4,7 @@ module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Map as M
+import qualified OrderedMap as M
 
 data SSA
 data NotSSA
@@ -100,9 +100,10 @@ instance Pretty RetInst where
   pretty (RetInstConditionalBranch cond then' else') = pretty "branch if" <+> pretty cond <+> pretty "then" <+> pretty then' <+> pretty "else" <+> pretty else'
 
 data IRProgram = IRProgram {
-  irProgramBBMap :: M.Map BBId BasicBlock,
+  irProgramBBMap :: M.OrderedMap BBId BasicBlock,
   irProgramEntryBBId :: BBId
 }
 
 instance Pretty IRProgram where
-  pretty (IRProgram bbmap entryId) = vsep [pretty "entry: " <+> pretty entryId, pretty (M.elems bbmap)]
+  pretty (IRProgram bbmap entryId) = vsep $ [pretty "entry: " <+> pretty entryId, pretty "program: "] ++
+                                            fmap pretty (M.elems bbmap)

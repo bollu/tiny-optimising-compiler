@@ -1,3 +1,3 @@
 define x;
-assign x := 1;
-assign x := x + 1;
+assign x := 10;
+assign x := x + 42;

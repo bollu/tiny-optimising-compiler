@@ -1,7 +1,7 @@
 module ProgramToIR where
 import Language
 import IR
-import qualified Data.Map.Strict as M
+import qualified OrderedMap as M
 import Data.Traversable
 import Data.Foldable
 import Control.Monad.State.Strict
@@ -13,13 +13,13 @@ data Builder = Builder {
  -- | The BB the builder is currently focused on
   currentBBId :: BBId,
   -- | Mapping from BBId to BasicBlock
-  bbIdToBB :: M.Map BBId BasicBlock,
+  bbIdToBB :: M.OrderedMap BBId BasicBlock,
   -- | counter to generate new instruction name
   tmpInstNamesCounter :: Int,
   -- | Map from name to count of number of times name has occured
-  instNameCounter :: M.Map String Int,
+  instNameCounter :: M.OrderedMap String Int,
   -- | Map from literal name to Value
-  literalToValue :: M.Map Literal Value
+  literalToValue :: M.OrderedMap Literal Value
 }
 
 -- | Create a new builder with an empty basic block
@@ -36,9 +36,9 @@ newBuilder =
       initbuilder = (Builder {
         entryBBId = Label "",
         currentBBId = Label "",
-        bbIdToBB = M.empty,
+        bbIdToBB = mempty,
         tmpInstNamesCounter=0,
-        instNameCounter=M.empty,
+        instNameCounter=mempty,
         literalToValue=mempty
     })
 
@@ -140,7 +140,11 @@ mkBinOpInst lhs And rhs = InstAnd lhs rhs
 
 buildExpr :: Expr' -> State Builder Value
 buildExpr (EInt _ i) = return $  ValueConstInt i
-buildExpr (ELiteral _ lit) = getLiteralValueMapping lit
+buildExpr (ELiteral _ lit) = do
+    name <- getUniqueInstName $ unLiteral lit ++ ".load"
+    val <- getLiteralValueMapping lit
+    appendInst $ name =:=  InstLoad val
+
 buildExpr (EBinOp _ lhs op rhs) = do
     lhs <- buildExpr lhs
     rhs <- buildExpr rhs
@@ -155,9 +159,10 @@ buildAssign :: Literal -> Expr' -> State Builder Value
 buildAssign lit expr = do
   exprval <- buildExpr expr
   litval <- getLiteralValueMapping lit
-  name <- getUniqueInstName $ (unLiteral lit) ++ ".store"
+  name <- getUniqueInstName $ "_"
   -- TODO: do not allow Store to be named with type system trickery
   appendInst $ name =:= InstStore litval exprval
+  return $ ValueInstRef name
 
 -- | Build IR for "define x"
 buildDefine :: Literal -> State Builder Value
@@ -175,11 +180,13 @@ buildStmt (If _ cond then' else') = do
   currbb <- getCurrentBBId
 
   bbthen <- createNewBB (Label "then")
+  bbelse <- createNewBB (Label "else")
+  bbjoin <- createNewBB (Label "join")
+
   focusBB bbthen
   stmtsToInsts then'
 
 
-  bbelse <- createNewBB (Label "else")
   focusBB bbelse
   stmtsToInsts else'
 

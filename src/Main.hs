@@ -8,7 +8,7 @@ import System.IO
 import System.Environment
 import TransformMem2Reg
 import PrettyUtils
-import qualified Data.Map as M
+import qualified OrderedMap as M
 
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
