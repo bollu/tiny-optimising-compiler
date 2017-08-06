@@ -314,17 +314,12 @@ mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
 -- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
 placePhiNodes_ :: CFG -> DomTree -> M.OrderedMap BBId BasicBlock -> M.OrderedMap BBId BasicBlock
 placePhiNodes_ cfg domtree initbbmap =
-    trace debugstr (M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap usesToBBIds)  where
+    M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap usesToBBIds  where
       bbIdToUses :: M.OrderedMap BBId [Label Inst]
       bbIdToUses = fmap getBBVarUses initbbmap
 
       usesToBBIds :: M.OrderedMap (Label Inst) [BBId]
       usesToBBIds = mapReverse bbIdToUses
-
-      debugstr = docToString $ vcat [pretty "usesToBBIds: ",
-                                     pretty usesToBBIds,
-                                     pretty "bbIdsToUses: ",
-                                     pretty bbIdToUses]
 
 -- | Find wherever this variable is "declared". An Alloca or a Phi node is considered a declare
 getVarDeclBBIds :: M.OrderedMap BBId BasicBlock -> M.OrderedMap (Label Inst) [BBId]
@@ -368,7 +363,7 @@ renameInstsInDomSet :: Label Inst -- ^Original label
                    -> M.OrderedMap BBId BasicBlock
                    -> M.OrderedMap BBId BasicBlock
 renameInstsInDomSet l l' bbIdToDomSet bbid bbmap =
-    trace (docToString $  pretty "original: " <+> pretty l <+> pretty "new: " <+> pretty l' <+> pretty "in" <+> pretty (S.toList domset)) (adjustWithKeys renamer domset bbmap) where
+    adjustWithKeys renamer domset bbmap where
         domset :: S.Set BBId
         domset = bbIdToDomSet M.! bbid
 
@@ -390,10 +385,13 @@ uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m wh
 
 data VariableRenameContext = VariableRenameContext {
   ctxVarToCount :: M.OrderedMap (Label Inst) Int,
-  ctxBBMap :: M.OrderedMap (BBId) BasicBlock,
   ctxVarToVal :: M.OrderedMap (Label Inst) Value,
-  ctxLoadNameToSlotName :: M.OrderedMap (Label Inst) (Label Inst)
+  ctxBBMap :: M.OrderedMap (BBId) BasicBlock
 }
+instance Pretty VariableRenameContext where
+    pretty (VariableRenameContext{..}) =
+        vcat [pretty "vartocount:", pretty ctxVarToCount,
+              pretty "vartoval:", pretty ctxVarToVal]
 
 bumpUpCount :: Label Inst -> State VariableRenameContext ()
 bumpUpCount name = do
@@ -420,6 +418,17 @@ renameValue_ (ValueInstRef name) = do
       Just val -> return val
       Nothing -> ValueInstRef <$> getLatestName name
 
+-- | When renaming a Phi node, we need the added index as well for a store.
+-- | So, call renameValueForPhi_ recursively so we get the "latest" renamed version.
+renameValueForPhi_ :: Value -> State VariableRenameContext Value
+renameValueForPhi_ v@(ValueConstInt _) = return v
+renameValueForPhi_ (ValueInstRef name) = do
+    varToValue <- gets ctxVarToVal
+    varToCount <- gets ctxVarToCount
+    case M.lookup name varToValue of
+      Just val -> (renameValueForPhi_ val)
+      Nothing -> ValueInstRef <$> getLatestName name
+
 -- | Rename bindings in the RHS of an instruction.
 variableRenameInstRHS :: Inst -> State VariableRenameContext Inst
 variableRenameInstRHS inst = forInstValue renameValue_  inst
@@ -430,13 +439,7 @@ variableRenameInstLHS namedInst@(Named name inst) = do
    bumpUpCount name
    curValToCount <- gets ctxVarToCount
    name' <- getLatestName name
-   case inst of
-      InstStore (ValueInstRef slot) val -> do
-                              bumpUpCount slot
-                              slot' <- getLatestName slot
-                              return $ Named slot' (InstValRef val)
-      _ -> do
-        return (Named name' inst)
+   return (Named name' inst)
 
 -- | Rename RHS & LHS of an instruction correctly
 -- | Can return [] for instructions to be omitted
@@ -447,9 +450,7 @@ variableRenameInst namedinst@(Named name inst) = do
 
     case inst of
         InstStore (ValueInstRef slot) val -> do
-          modify (\ctx -> let
-                            loadloc = undefined -- (ctxLoadNameToSlotName ctx) M.! slot
-                            in ctx {ctxVarToVal=M.insert slot val (ctxVarToVal ctx)})
+          modify (\ctx -> ctx {ctxVarToVal=M.insert slot val (ctxVarToVal ctx)})
           return []
 
         InstLoad (ValueInstRef slot) -> do
@@ -500,7 +501,7 @@ variableRenamePhiNodes curbbid phibbid = do
     renamePhiBinding :: BBId -> (BBId, Value) -> State VariableRenameContext (BBId, Value)
     renamePhiBinding curbbid (bbid, value) = (bbid,)  <$> stateValue'
         where stateValue' = if bbid == curbbid
-                        then renameValue_ value
+                        then renameValueForPhi_ value
                         else return value
 
 
@@ -516,7 +517,14 @@ instructionsRenameAtBB curbbid = do
   let curbb' = curbb { bbInsts = bbInsts' }
   let bbmap' = M.insert curbbid curbb' bbmap
 
-  modify (\ctx -> ctx { ctxBBMap=M.insert curbbid curbb' (ctxBBMap ctx)})
+  modify (\ctx -> ctx { ctxBBMap=bbmap' })
+
+-- | Copy back numbering information from the old context to the new context
+resetNumbering :: VariableRenameContext -> VariableRenameContext -> VariableRenameContext
+resetNumbering oldctx newctx = newctx {
+    ctxVarToVal=ctxVarToVal oldctx,
+    ctxVarToCount=ctxVarToCount oldctx
+}
 
 -- 1. rename instructions
 -- 2. rename phi nodes of children in CFG
@@ -525,6 +533,9 @@ instructionsRenameAtBB curbbid = do
 -- | Like seriously, I hate myself a little for *writing* this bastard.
 variableRenameAtBB :: CFG -> DomTree -> BBId -> State VariableRenameContext ()
 variableRenameAtBB cfg domtree curbbid = do
+  ctx <- get
+  traceM $ docToString $ pretty "@@@ running on: " <+> pretty curbbid
+  traceM $ docToString $  pretty "@@@ state: " <+> pretty ctx
   -- | Rename all instructions at BB
   instructionsRenameAtBB curbbid
 
@@ -533,18 +544,19 @@ variableRenameAtBB cfg domtree curbbid = do
   forM_ cfgChildrenIDs (variableRenamePhiNodes curbbid)
 
   -- | Pull out final states to reset these for each child
-  finalVarToCount <- gets ctxVarToCount
-  finalVarToValue <- gets ctxVarToVal
-  finalLoadNameToSlotName <- gets ctxLoadNameToSlotName
+  parentctx <- get
 
   let domTreeChildrenIDs = getImmediateChildren domtree curbbid
   forM_ domTreeChildrenIDs (\childid -> do
-                                  -- | reset these states across children
-                                  modify (\ctx -> ctx { ctxVarToCount=finalVarToCount,
-                                                        ctxVarToVal=finalVarToValue,
-                                                        ctxLoadNameToSlotName=finalLoadNameToSlotName
-                                                        })
+
+                                  varToVal <- gets ctxVarToVal
+                                  traceM $ docToString $ pretty "@@@ ENTERING CHILD: " <+> pretty childid <+> pretty "FROM PARENT: " <+>  pretty curbbid
+                                  traceM $ docToString $ indent 4 $
+                                      vcat [pretty "ctxVarToVal: ", pretty varToVal]
+
                                   variableRenameAtBB cfg domtree childid)
+  -- | reset these states across children
+  modify (resetNumbering parentctx)
   return ()
 
 
@@ -561,21 +573,24 @@ variableRename_ cfg domtree entrybbid bbmap =
       initctx :: VariableRenameContext
       initctx = VariableRenameContext { ctxVarToCount=mempty,
                                         ctxBBMap=bbmap,
-                                        ctxVarToVal=mempty,
-                                        ctxLoadNameToSlotName=mempty }
+                                        ctxVarToVal=mempty
+                                      }
+
 
 transformMem2Reg :: IRProgram -> IRProgram
 transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
                            irProgramEntryBBId=entrybbid} =
-  IRProgram {irProgramBBMap=bbmap', irProgramEntryBBId=entrybbid} where
-  cfg :: CFG
-  cfg =  mkBBGraph bbmap
+    (IRProgram {irProgramBBMap=bbmap', irProgramEntryBBId=entrybbid}) where
+      cfg :: CFG
+      cfg =  mkBBGraph bbmap
 
-  bbIdToDomSet :: BBIdToDomSet
-  bbIdToDomSet = constructBBDominators program
+      bbIdToDomSet :: BBIdToDomSet
+      bbIdToDomSet = constructBBDominators program
 
-  domtree :: DomTree
-  domtree = constructDominatorTree bbIdToDomSet entrybbid
+      domtree :: DomTree
+      domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-  bbmap' = (variableRename_ cfg domtree entrybbid) . (placePhiNodes_ cfg domtree) $ bbmap
+      bbmapWithPhi :: M.OrderedMap BBId BasicBlock
+      bbmapWithPhi = (placePhiNodes_ cfg domtree) $ bbmap
 
+      bbmap' = (variableRename_ cfg domtree entrybbid) bbmapWithPhi

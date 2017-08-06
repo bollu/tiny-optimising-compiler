@@ -32,9 +32,9 @@ data OrderedMap k v = OrderedMap { map' :: M.Map k v, order :: [k] } deriving(Sh
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (OrderedMap k v) where
   pretty (OrderedMap _ []) = pretty "empty map"
-  pretty ok = vcat (map pkv (toList ok)) where
+  pretty ok = indent 2 (vcat (map pkv (toList ok))) where
     pkv :: (Pretty k, Pretty v) => (k, v) -> Doc ann
-    pkv (k, v) = pretty "** key: " <+> pretty k <+> pretty " | value : " <+> pretty v
+    pkv (k, v) =  pretty k <+> pretty " => " <+> pretty v
 
 instance Ord k => Monoid (OrderedMap k v) where
   mempty :: OrderedMap k v
@@ -52,7 +52,10 @@ liftMapExtract_ f (OrderedMap map' _) = f map'
 -- | NOTE: this will maintain the order of insertion. Elements that are inserted
 -- | later are returned later in the `keys`, `elems`.
 insert  :: Ord k => k -> a -> OrderedMap k a -> OrderedMap k a
-insert = OrderedMap.insertWith const
+insert k a om@OrderedMap{..} = case (liftMapExtract_ (M.lookup k)) om of
+            Nothing -> OrderedMap (M.insert k a map') (order ++ [k])
+            -- If the key already exists, keep the old order
+            _ -> OrderedMap (M.insert k a map') (order)
 
 -- | NOTE: this will maintain the order of insertion. Elements that are inserted
 -- | later are returned later in the `keys`, `elems`.
