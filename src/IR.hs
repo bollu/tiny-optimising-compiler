@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DeriveFunctor #-}
 module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
@@ -9,7 +10,7 @@ data SSA
 data NotSSA
 
 -- | A label that uses the phantom @a as a type based discriminator
-data Label a = Label { unLabel ::  String } deriving(Eq, Ord)
+data Label a = Label { unLabel ::  String } deriving(Eq, Ord, Functor)
 instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
@@ -57,7 +58,7 @@ instance Pretty Inst where
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
 -- | Represents @a that is optionally named by a @Label a
-data Named a = Named { namedName :: Label a, namedData :: a }
+data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor)
 
 
 -- | Infix operator for @Named constructor

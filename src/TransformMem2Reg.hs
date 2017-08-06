@@ -13,7 +13,7 @@ import IR
 import Data.Tree
 import Data.List(nub)
 import qualified Data.Set as S
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import Data.Text.Prettyprint.Doc as PP
 import Debug.Trace
 import PrettyUtils
@@ -22,6 +22,7 @@ import Data.Traversable
 import qualified Data.Monoid as Monoid
 import qualified Data.Set as S
 import qualified Data.List.NonEmpty as NE
+import Control.Monad.State.Strict
 
 -- | Represents a graph with `a` as a vertex ID type
 newtype Graph a = Graph { edges :: [(a, a)] }
@@ -392,26 +393,113 @@ uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m wh
     uniqifyPerKeyVal_ uniqf k (i, a) =  [(uniqf i k, (k, a))]
 
 
+data VariableRenameContext = VariableRenameContext {
+  ctxVarToCount :: M.Map (Label Inst) Int,
+  ctxBBMap :: M.Map (BBId) BasicBlock
+}
+
+varxxx :: M.Map (Label Inst) Int
+varxxx = undefined
+
+getUpdatedVarName :: Label Inst -> State VariableRenameContext (Label Inst)
+getUpdatedVarName name = do
+  varToCount <- gets ctxVarToCount
+  -- If a value exists, bump it up. Otherwise set to 0
+  let count' = M.insertWith (\new old -> old + 1) name 0 varToCount
+  modify (\ctx -> ctx {ctxVarToCount=count'})
+
+  let curcount = count' M.! name
+  if curcount == 0
+  then return name
+  else
+    return (Label $ (unLabel name) ++ show "." ++ "renamed" ++ show curcount)
+
+
+-- | Function to rename value based on the current rename counts
+renameValue_ :: M.Map (Label Inst) Int -> Value -> Value
+renameValue_ _ v@(ValueConstInt _) = v
+renameValue_ varToCount (ValueInstRef name) =
+  ValueInstRef $ Label ((unLabel name) ++ "." ++ show (varToCount M.! name))
+
+-- | Rename bindings in the RHS of an instruction.
+variableRenameInstRHS :: M.Map (Label Inst) Int -> Inst -> Inst
+variableRenameInstRHS varToCount inst =
+  mapInstValue (renameValue_ varToCount) inst
+
+-- | Rename bindings in the LHS of an instruction
+variableRenameInstLHS :: Named Inst -> State VariableRenameContext (Named Inst)
+variableRenameInstLHS namedInst@(Named name inst) = do
+   name' <- getUpdatedVarName name
+   return (Named name' inst)
+
+-- | Rename RHS & LHS of an instruction correctly
+variableRenameInst :: Named Inst -> State VariableRenameContext (Named Inst)
+variableRenameInst namedinst = do
+    curVarToCount <- gets ctxVarToCount
+    -- | Rename RHS
+    let rhsrenamed = fmap (variableRenameInstRHS curVarToCount) namedinst
+    lhsrenamed <- variableRenameInstLHS rhsrenamed
+    return lhsrenamed
+
+
+
+-- | Rename phi nodes in bb
+variableRenamePhiNodes :: M.Map (Label Inst) Int -> BasicBlock -> BasicBlock
+variableRenamePhiNodes varToCount bb = bb {
+  bbInsts = fmap (fmap phiRenamer) (bbInsts bb)
+} where
+    -- | Rename only phi ndoes leaving other instructions
+    phiRenamer :: Inst -> Inst
+    phiRenamer (InstPhi philist) = InstPhi (renamePhiList varToCount philist)
+    phiRenamer (inst) = inst
+    -- | Rename bindings in a phi node
+    renamePhiList :: M.Map (Label Inst) Int -> NE.NonEmpty (BBId, Value) -> NE.NonEmpty (BBId, Value)
+    renamePhiList varToCount philist =
+      fmap (\(bbid, value) -> (bbid, renameValue_ varToCount value)) philist
+
+
+
+
+-- TODO: fold current BBId into the state or something, this is a HUGE mess.
+variableRenameAtBB :: CFG -> DomTree -> BBId -> State VariableRenameContext ()
+variableRenameAtBB cfg domtree curbbid = do
+  varToCount <- gets ctxVarToCount
+  bbmap <- gets ctxBBMap
+  let curbb = bbmap M.! curbbid
+  bbInsts' <- for (bbInsts curbb) variableRenameInst
+
+  let curbb' = curbb { bbInsts = bbInsts' }
+  let bbmap' = M.insert curbbid curbb' bbmap
+
+  let cfgChildrenIDs = getImmediateChildren cfg curbbid
+  let phiBBs = fmap (bbmap M.! ) cfgChildrenIDs
+  varToCount' <- gets ctxVarToCount
+  let phiEditedBBs = fmap (variableRenamePhiNodes varToCount') phiBBs
+
+  let finalBBMap = foldl (\bbmap' (k, v) -> M.insert k v bbmap' ) bbmap' (zip cfgChildrenIDs phiEditedBBs)
+  finalVarToCount <- gets ctxVarToCount
+  modify (\ctx -> ctx {ctxBBMap = finalBBMap})
+
+  let domTreeChildrenIDs = getImmediateChildren domtree curbbid
+  forM_ domTreeChildrenIDs (\childid -> do
+                                  -- | share varToCount across all children
+                                  modify (\ctx -> ctx { ctxVarToCount=finalVarToCount})
+                                  variableRenameAtBB cfg domtree childid)
+  return ()
+
+
 
 
 -- | Rename variables to be unique in the function.
-variableRename_ :: BBIdToDomSet -- ^Dom sets
+variableRename_ :: CFG  -- ^ The CFG for the program.
+                   -> DomTree -- ^Dominator tree for the program.
+                   -> BBId -- ^Entry BBId
                    -> M.Map BBId BasicBlock -- ^Function
                    -> M.Map BBId BasicBlock
-variableRename_ bbIdToDomSet origbbmap =
-    M.foldlWithKey (\bbmap uniqlbl (oldlbl, bbid) ->
-        renameInstsInDomSet oldlbl uniqlbl bbIdToDomSet bbid bbmap) origbbmap uniquedDecls
-    where
-        -- Make each BB per label point to a "unique" label.
-        uniquedDecls :: M.Map (Label Inst) (Label Inst, BBId)
-        uniquedDecls = uniquifyKeys  mkNewLabel declBBIds
-
-        declBBIds :: M.Map (Label Inst) [BBId]
-        declBBIds = getVarDeclBBIds origbbmap
-
-        mkNewLabel :: Int -> Label Inst ->  Label Inst
-        mkNewLabel i l = Label ("phi." ++ unLabel l ++ "." ++ show i)
-
+variableRename_ cfg domtree entrybbid bbmap =
+    ctxBBMap $ execState (variableRenameAtBB cfg domtree entrybbid) initctx where
+      initctx :: VariableRenameContext
+      initctx = VariableRenameContext { ctxVarToCount=mempty, ctxBBMap=bbmap }
 
 transformMem2Reg :: IRProgram -> IRProgram
 transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
@@ -426,5 +514,5 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
   domtree :: DomTree
   domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-  bbmap' = (variableRename_ bbIdToDomSet) . (placePhiNodes_ cfg domtree) $ bbmap
+  bbmap' = (variableRename_ cfg domtree entrybbid) . (placePhiNodes_ cfg domtree) $ bbmap
 
