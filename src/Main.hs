@@ -1,6 +1,7 @@
 module Main where
 import Parser
 import qualified IR as IR
+import IRInterpreter
 import qualified Language as Lang
 import Data.Text.Prettyprint.Doc
 import ProgramToIR
@@ -46,5 +47,10 @@ main = do
 
             putStrLn "*** Mem2Reg ***"
             let mem2regprog = transformMem2Reg irprogram
-            putStrLn . prettyableToString $ mem2regprog
+
+            putStrLn "*** Original program value ***"
+            putStrLn . prettyableToString . runProgram $ irprogram
+
+            putStrLn "*** Mem2Reg program value ***"
+            putStrLn . prettyableToString . runProgram $ mem2regprog
 
