@@ -179,19 +179,16 @@ buildStmt (If _ cond then' else') = do
   condval <- buildExpr cond
   currbb <- getCurrentBBId
 
-  bbthen <- createNewBB (Label "then")
-  bbelse <- createNewBB (Label "else")
-  bbjoin <- createNewBB (Label "join")
 
+  bbthen <- createNewBB (Label "then")
   focusBB bbthen
   stmtsToInsts then'
 
-
+  bbelse <- createNewBB (Label "else")
   focusBB bbelse
   stmtsToInsts else'
 
   bbjoin <- createNewBB (Label "join")
-
   focusBB bbthen
   setRetInst $ RetInstBranch bbjoin
 
