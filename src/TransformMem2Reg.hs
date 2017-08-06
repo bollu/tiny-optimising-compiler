@@ -393,6 +393,7 @@ instance Pretty VariableRenameContext where
         vcat [pretty "vartocount:", pretty ctxVarToCount,
               pretty "vartoval:", pretty ctxVarToVal]
 
+-- | Bump up the count of a variable.
 bumpUpCount :: Label Inst -> State VariableRenameContext ()
 bumpUpCount name = do
   varToCount <- gets ctxVarToCount
@@ -400,10 +401,16 @@ bumpUpCount name = do
   let count' = M.insertWith (\new old -> old + 1) name 0 varToCount
   modify (\ctx -> ctx {ctxVarToCount=count'})
 
+-- | Get the count of a variable.
+getVarCount :: Label Inst -> State VariableRenameContext Int
+getVarCount name = do
+    modify (\ctx -> ctx {ctxVarToCount = M.insertWith (\new old -> old) name 0 (ctxVarToCount ctx)})
+    gets (\ctx -> ctxVarToCount ctx M.! name)
+
 getLatestName :: Label Inst -> State VariableRenameContext (Label Inst)
 getLatestName name = do
-    varToCount <- gets ctxVarToCount
-    return $ Label $ ((unLabel name) ++ ".renamed." ++ show (varToCount M.! name))
+    count <- getVarCount name
+    return $ Label $ (unLabel name) ++ ".renamed." ++ show count
 
 
 -- | Function to rename value based on the current rename counts
@@ -413,21 +420,10 @@ renameValue_ :: Value -> State VariableRenameContext Value
 renameValue_ v@(ValueConstInt _) = return v
 renameValue_ (ValueInstRef name) = do
     varToValue <- gets ctxVarToVal
-    varToCount <- gets ctxVarToCount
     case M.lookup name varToValue of
       Just val -> return val
       Nothing -> ValueInstRef <$> getLatestName name
 
--- | When renaming a Phi node, we need the added index as well for a store.
--- | So, call renameValueForPhi_ recursively so we get the "latest" renamed version.
-renameValueForPhi_ :: Value -> State VariableRenameContext Value
-renameValueForPhi_ v@(ValueConstInt _) = return v
-renameValueForPhi_ (ValueInstRef name) = do
-    varToValue <- gets ctxVarToVal
-    varToCount <- gets ctxVarToCount
-    case M.lookup name varToValue of
-      Just val -> (renameValueForPhi_ val)
-      Nothing -> ValueInstRef <$> getLatestName name
 
 -- | Rename bindings in the RHS of an instruction.
 variableRenameInstRHS :: Inst -> State VariableRenameContext Inst
@@ -441,25 +437,25 @@ variableRenameInstLHS namedInst@(Named name inst) = do
    name' <- getLatestName name
    return (Named name' inst)
 
+
 -- | Rename RHS & LHS of an instruction correctly
 -- | Can return [] for instructions to be omitted
 variableRenameInst :: Named Inst -> State VariableRenameContext [Named Inst]
 variableRenameInst namedinst@(Named name inst) = do
-    curVarToCount <- gets ctxVarToCount
-    curVarToValue <- gets ctxVarToVal
-
     case inst of
         InstStore (ValueInstRef slot) val -> do
-          modify (\ctx -> ctx {ctxVarToVal=M.insert slot val (ctxVarToVal ctx)})
+          valNamed <- renameValue_ val
+          modify (\ctx -> ctx {ctxVarToVal=M.insert slot valNamed (ctxVarToVal ctx)})
           return []
 
         InstLoad (ValueInstRef slot) -> do
-          let loadedval = curVarToValue M.! slot
+          loadedval <- renameValue_ (ValueInstRef slot)
           modify (\ctx -> ctx {ctxVarToVal=M.insert name loadedval (ctxVarToVal ctx)})
           return []
 
         -- | We don't need allocs, so delete them
         InstAlloc -> return []
+
         _ -> do
           -- | Rename RHS
           (rhsrenamed :: Named Inst) <- forM namedinst variableRenameInstRHS
@@ -467,6 +463,10 @@ variableRenameInst namedinst@(Named name inst) = do
           return [lhsrenamed]
 
 
+
+-- | Rename the return instruction
+variableRenameRetInst :: RetInst -> State VariableRenameContext (RetInst)
+variableRenameRetInst ret = forRetInstValue renameValue_ ret
 
 -- | Rename phi nodes in bb
 variableRenamePhiNodes :: BBId -- ^Current BB Id
@@ -501,12 +501,12 @@ variableRenamePhiNodes curbbid phibbid = do
     renamePhiBinding :: BBId -> (BBId, Value) -> State VariableRenameContext (BBId, Value)
     renamePhiBinding curbbid (bbid, value) = (bbid,)  <$> stateValue'
         where stateValue' = if bbid == curbbid
-                        then renameValueForPhi_ value
+                        then renameValue_ value
                         else return value
 
 
 
--- | Rename all instructions at a given BB
+-- | Rename all instructions and the return instructoin at a given BB
 instructionsRenameAtBB :: BBId -> State VariableRenameContext ()
 instructionsRenameAtBB curbbid = do
   bbmap <- gets ctxBBMap
@@ -514,7 +514,9 @@ instructionsRenameAtBB curbbid = do
   let curbb = bbmap M.! curbbid
   bbInsts' <- mconcat <$> for (bbInsts curbb) variableRenameInst
 
-  let curbb' = curbb { bbInsts = bbInsts' }
+  bbRetInst' <- variableRenameRetInst (bbRetInst curbb)
+
+  let curbb' = curbb { bbInsts = bbInsts', bbRetInst = bbRetInst' }
   let bbmap' = M.insert curbbid curbb' bbmap
 
   modify (\ctx -> ctx { ctxBBMap=bbmap' })
@@ -526,6 +528,9 @@ resetNumbering oldctx newctx = newctx {
     ctxVarToCount=ctxVarToCount oldctx
 }
 
+resetVarMappings :: State VariableRenameContext ()
+resetVarMappings = modify (\ctx -> ctx { ctxVarToVal=mempty })
+
 -- 1. rename instructions
 -- 2. rename phi nodes of children in CFG
 -- 3. follow process into children of dominator tree
@@ -533,9 +538,21 @@ resetNumbering oldctx newctx = newctx {
 -- | Like seriously, I hate myself a little for *writing* this bastard.
 variableRenameAtBB :: CFG -> DomTree -> BBId -> State VariableRenameContext ()
 variableRenameAtBB cfg domtree curbbid = do
-  ctx <- get
+  -- | 1. Reset variable mappings from your parent because they will
+  -- | No longer hold for the child
+  -- | eg.
+  -- | Parent(y=1)
+  -- |    |      |
+  -- |   (y=2)  (y=3)
+  -- |     \      /
+  -- |      ------
+  -- |         |
+  -- |        child <- is dominated by parent, CANNOT assume (y = 1)
+  -- | Pull out final states to reset these for each child
+  resetVarMappings
+  parentctx <- get
   traceM $ docToString $ pretty "@@@ running on: " <+> pretty curbbid
-  traceM $ docToString $  pretty "@@@ state: " <+> pretty ctx
+  traceM $ docToString $  pretty "@@@ state: " <+> pretty parentctx
   -- | Rename all instructions at BB
   instructionsRenameAtBB curbbid
 
@@ -543,8 +560,6 @@ variableRenameAtBB cfg domtree curbbid = do
   let cfgChildrenIDs = getImmediateChildren cfg curbbid
   forM_ cfgChildrenIDs (variableRenamePhiNodes curbbid)
 
-  -- | Pull out final states to reset these for each child
-  parentctx <- get
 
   let domTreeChildrenIDs = getImmediateChildren domtree curbbid
   forM_ domTreeChildrenIDs (\childid -> do

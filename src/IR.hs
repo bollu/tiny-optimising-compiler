@@ -106,6 +106,13 @@ instance Pretty RetInst where
   pretty (RetInstBranch next) = pretty "branch" <+> pretty next
   pretty (RetInstConditionalBranch cond then' else') = pretty "branch if" <+> pretty cond <+> pretty "then" <+> pretty then' <+> pretty "else" <+> pretty else'
 
+-- | Run an effect `f` over the values of the return instruction
+forRetInstValue :: Applicative m => (Value -> m Value) -> RetInst -> m RetInst
+forRetInstValue _ RetInstTerminal = pure RetInstTerminal
+forRetInstValue _ (RetInstBranch bbid) = pure (RetInstBranch bbid)
+forRetInstValue f (RetInstConditionalBranch v t e) =
+    RetInstConditionalBranch <$> f v <*> pure t <*> pure e
+
 data IRProgram = IRProgram {
   irProgramBBMap :: M.OrderedMap BBId BasicBlock,
   irProgramEntryBBId :: BBId
