@@ -78,8 +78,17 @@ size = liftMapExtract_ M.size
 keys :: OrderedMap k a -> [k]
 keys  = order
 
+index_ :: (Pretty k, Pretty a, Ord k) => OrderedMap k a -> k -> a
+index_ omap k = case OrderedMap.lookup k omap of
+            Just a -> a
+            Nothing -> error . docToString $
+                         vcat [pretty "Omap is in inconstent state. Indexing at key:"
+                              , pretty k
+                              , pretty "omap: "
+                              , pretty omap]
+
 elems :: (Ord k, Pretty k, Pretty a) => OrderedMap k a -> [a]
-elems omap = map (omap OrderedMap.!) (keys omap)
+elems omap = map (index_ omap) (keys omap) where
 
 union :: (Eq k, Ord k) => OrderedMap k a -> OrderedMap k a -> OrderedMap k a
 union (OrderedMap{order=o1, map'=m1}) (OrderedMap{order=o2, map'=m2}) =
@@ -87,7 +96,7 @@ union (OrderedMap{order=o1, map'=m1}) (OrderedMap{order=o2, map'=m2}) =
 
 -- | Return the list of key value pairs in the order of insertion.
 toList :: (Ord k, Pretty k, Pretty a) => OrderedMap k a -> [(k, a)]
-toList omap = map (\k -> (k, omap OrderedMap.! k)) (keys omap)
+toList omap = map (\k -> (k, index_ omap k)) (keys omap)
 
 adjust :: Ord k => (a -> a) -> k -> OrderedMap k a -> OrderedMap k a
 adjust f k = liftMapEdit_ (M.adjust f k)
