@@ -28,7 +28,8 @@ type Block a = [Stmt a]
 data Stmt a = If a (Expr a) (Block a) (Block a) |
               While a (Expr a) (Block a) |
               Assign a Literal (Expr a) |
-              Define a Literal
+              Define a Literal |
+              Return a (Expr a)
 
 
 nestDepth :: Int
@@ -42,6 +43,7 @@ instance Pretty (Stmt a) where
   pretty (While _ cond body) = pretty "while" <+> pretty cond <+> PP.braces (nest 4 (pretty body))
   pretty (Assign _ lhs rhs) = pretty "assign" <+> pretty lhs <+> pretty ":=" <+> pretty rhs
   pretty (Define _ lit) = pretty "define" <+> pretty lit
+  pretty (Return _ expr) = pretty "return" <+> pretty expr
 
 type Stmt' = Stmt ()
 

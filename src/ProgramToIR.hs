@@ -171,6 +171,12 @@ buildDefine lit = do
   mapLiteralToValue lit (ValueInstRef name)
   appendInst $ name =:= InstAlloc
 
+-- | Build IR for "Return"
+buildRet :: Expr' -> State Builder ()
+buildRet retexpr = do
+  retval <- buildExpr retexpr
+  setRetInst $ RetInstRet retval
+
 -- | Build IR for "Stmt"
 buildStmt :: Stmt' -> State Builder ()
 buildStmt (Define _ lit) = buildDefine lit >> return ()
@@ -219,6 +225,7 @@ buildStmt (While _ cond body) = do
 
   focusBB endbb
 
+buildStmt (Return _ retexpr) = buildRet retexpr
 
 -- Given a collection of statements, create a State that will create these
 -- statements in the builder

@@ -15,7 +15,6 @@ import Data.List(nub)
 import qualified Data.Set as S
 import qualified OrderedMap as M
 import Data.Text.Prettyprint.Doc as PP
-import Debug.Trace
 import PrettyUtils
 import Control.Monad.Reader
 import Data.Traversable
@@ -57,6 +56,7 @@ vertices (Graph edges) = nub (map fst edges ++ map snd edges)
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstTerminal}) = []
+getBBSuccessors (BasicBlock { bbRetInst = RetInstRet _}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
@@ -555,8 +555,6 @@ variableRenameAtBB cfg domtree curbbid = do
   -- | Pull out final states to reset these for each child
   resetVarMappings
   parentctx <- get
-  traceM $ docToString $ pretty "@@@ running on: " <+> pretty curbbid
-  traceM $ docToString $  pretty "@@@ state: " <+> pretty parentctx
   -- | Rename all instructions at BB
   instructionsRenameAtBB curbbid
 
@@ -569,10 +567,6 @@ variableRenameAtBB cfg domtree curbbid = do
   forM_ domTreeChildrenIDs (\childid -> do
 
                                   varToVal <- gets ctxVarToLatestStoreVal
-                                  traceM $ docToString $ pretty "@@@ ENTERING CHILD: " <+> pretty childid <+> pretty "FROM PARENT: " <+>  pretty curbbid
-                                  traceM $ docToString $ indent 4 $
-                                      vcat [pretty "ctxVarToLatestStoreVal: ", pretty varToVal]
-
                                   variableRenameAtBB cfg domtree childid)
   -- | reset these states across children
   modify (resetNumbering parentctx)

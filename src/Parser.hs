@@ -31,7 +31,7 @@ identStyle = IdentifierStyle
     { _styleName = "variable"
     , _styleStart = lower <|> char '_'
     , _styleLetter = alphaNum <|> oneOf "_'#"
-    , _styleReserved = HashSet.fromList ["define", "assign", "if", "else", "*", "+", "<", "&&"]
+    , _styleReserved = HashSet.fromList ["define", "assign", "if", "else", "return", "*", "+", "<", "&&"]
     , _styleHighlight = Identifier
     , _styleReservedHighlight = ReservedIdentifier }
 
@@ -110,12 +110,17 @@ definep = do
   name <- litp
   return $ Define () name
 
+retp :: Parser Stmt'
+retp = do
+  symbol "return"
+  retexpr <- exprp
+  return $ Return () retexpr
 
 stmtp :: Parser Stmt'
-stmtp = ifp <|> whilep <|> assignp <|> definep
+stmtp = ifp <|> whilep <|> assignp <|> definep <|> retp
 
 programp :: Parser Program'
-programp = Program <$> sepEndBy1 stmtp (symbol ";") 
+programp = Program <$> sepEndBy1 stmtp (symbol ";")
 
 
 -- vLow level interface to trifecta

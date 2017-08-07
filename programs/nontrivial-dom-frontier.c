@@ -16,3 +16,4 @@ if y < 42 {
 };
 
 assign x := 2 * y;
+return x;

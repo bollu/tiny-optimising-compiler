@@ -8,3 +8,4 @@ if x < 1 {
 };
 
 assign x := 2 * y;
+return x;

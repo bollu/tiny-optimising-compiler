@@ -12,7 +12,8 @@ data Evaluator = Evaluator {
     program :: IRProgram,
     prevbbid :: Maybe BBId,
     curBB :: BBId,
-    valueMap :: M.OrderedMap (Label Inst) Int
+    valueMap :: M.OrderedMap (Label Inst) Int,
+    returnval :: Maybe Int
 }
 
 initEvaluator :: IRProgram -> Evaluator
@@ -20,9 +21,8 @@ initEvaluator program = Evaluator {
     program = program,
     prevbbid = Nothing,
     curBB = (irProgramEntryBBId program),
-    valueMap = mempty
-
-
+    valueMap = mempty,
+    returnval = Nothing
 }
 
 loadName :: Label Inst -> State Evaluator Int
@@ -51,7 +51,7 @@ evaluateInst namedinst@(Named lhsname inst) = do
         InstStore (ValueInstRef slotname) val -> getValue val >>= setValue slotname
         InstAdd l r -> liftA2 (+) (getValue l) (getValue r) >>= setValue lhsname
         InstMul l r -> liftA2 (*) (getValue l) (getValue r) >>= setValue lhsname
-        InstL l r -> liftA2 (\l r -> if l < r then 0 else 1) (getValue l) (getValue r) >>= setValue lhsname
+        InstL l r -> liftA2 (\l r -> if l < r then 1 else 0) (getValue l) (getValue r) >>= setValue lhsname
         InstAnd l r -> liftA2 (\l r -> l * r) (getValue l) (getValue r) >>= setValue lhsname
         InstPhi bbidValuePairs -> do
                 prevbbid <- getPreviousBBId
@@ -72,6 +72,10 @@ followRetInst (RetInstConditionalBranch val t e) = do
     if valInt == 1
     then return (Just t)
     else return (Just e)
+followRetInst (RetInstRet retval) = do
+    retvalInt <- getValue retval
+    modify (\evaluator -> evaluator { returnval=Just retvalInt})
+    return Nothing
 
 evaluateBB :: BBId -> State Evaluator ()
 evaluateBB bbid = do
@@ -84,5 +88,5 @@ evaluateBB bbid = do
         Nothing -> return ()
         Just nextid -> evaluateBB nextid
 
-runProgram :: IRProgram -> M.OrderedMap (Label Inst) Int
-runProgram program = valueMap $ execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)
+runProgram :: IRProgram -> Maybe Int
+runProgram program = returnval $ execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)
