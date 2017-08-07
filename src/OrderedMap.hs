@@ -19,7 +19,8 @@ module OrderedMap(OrderedMap,
   foldMapWithKey,
   foldlWithKey,
   mapWithKey,
-  OrderedMap.lookup) where
+  OrderedMap.lookup,
+  delete) where
 import qualified Data.Map.Strict as M
 import Data.Monoid
 import PrettyUtils
@@ -125,3 +126,6 @@ foldlWithKey f a = liftMapExtract_ (M.foldlWithKey f a)
 
 mapWithKey :: (k -> a -> b) -> OrderedMap k a -> OrderedMap k b
 mapWithKey f = liftMapEdit_ (M.mapWithKey f)
+
+delete :: Ord k =>  k -> OrderedMap k a -> OrderedMap k a
+delete key omap@OrderedMap{..} = OrderedMap {order=L.delete key order, map'=M.delete key map' }

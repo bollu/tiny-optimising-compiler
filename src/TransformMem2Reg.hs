@@ -292,7 +292,7 @@ placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
 placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
     if null (curbbs)
     then bbmap
-    else (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
+    else trace debugStr (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
                 cur :: BBId
                 cur = S.elemAt 0 curbbs
 
@@ -308,6 +308,9 @@ placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
 
                 processed' :: S.Set BBId
                 processed' = (S.insert cur processed)
+
+                debugStr :: String
+                debugStr = docToString $ pretty "running for: " <+> pretty name <+> pretty "curbbs: " <+> pretty curbbs <+> pretty "cur: " <+> pretty cur <+> pretty "frontiner: " <+> pretty curfrontier
 
 mapReverse :: (Pretty k, Pretty a, Ord k, Ord a) => M.OrderedMap k [a] -> M.OrderedMap a [k]
 mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
@@ -415,35 +418,45 @@ getVarCount name = do
                                 Nothing -> error . docToString $ pretty "getVarCount, unknown name:" <+>  pretty name)
     return count
 
-getLatestName :: Label Inst -> State VariableRenameContext (Label Inst)
-getLatestName name = do
-    count <- getVarCount name
-    return $ Label $ (unLabel name) ++ ".renamed." ++ show count
-
+-- getLatestName :: Label Inst -> State VariableRenameContext (Label Inst)
+-- getLatestName name = do
+--     count <- getVarCount name
+--     return $ Label $ (unLabel name) ++ ".renamed." ++ show count
+--
 
 -- | Function to rename value based on the current rename counts
 -- | If there is a value remapping from a "store", then use that
 -- | If there is no remapping, then don't care
-renameValue_ :: Value -> State VariableRenameContext Value
-renameValue_ v@(ValueConstInt _) = return v
-renameValue_ (ValueInstRef name) = do
+-- renameValue_ :: Value -> State VariableRenameContext Value
+-- renameValue_ v@(ValueConstInt _) = return v
+-- renameValue_ (ValueInstRef name) = do
+--     varToValue <- gets ctxVarToLatestStoreVal
+--     case M.lookup name varToValue of
+--       Just val -> return val
+--       Nothing -> ValueInstRef <$> getLatestName name
+--
+renameStoredValue_ :: Value -> State VariableRenameContext Value
+renameStoredValue_ v@(ValueConstInt _) = return v
+renameStoredValue_ orig@(ValueInstRef name) = do
     varToValue <- gets ctxVarToLatestStoreVal
     case M.lookup name varToValue of
       Just val -> return val
-      Nothing -> ValueInstRef <$> getLatestName name
+      Nothing -> return orig
 
+getLatestStoredValue_ :: Label Inst -> State VariableRenameContext Value
+getLatestStoredValue_ lbl = gets (\ctx -> (ctxVarToLatestStoreVal ctx) M.! lbl)
 
 -- | Rename bindings in the RHS of an instruction.
 variableRenameInstRHS :: Inst -> State VariableRenameContext Inst
-variableRenameInstRHS inst = forInstValue renameValue_  inst
+variableRenameInstRHS inst = forInstValue renameStoredValue_  inst
 
 -- | Rename bindings in the LHS of an instruction
-variableRenameInstLHS :: Named Inst -> State VariableRenameContext (Named Inst)
-variableRenameInstLHS namedInst@(Named name inst) = do
-   bumpUpCount name
-   curValToCount <- gets ctxVarToCount
-   name' <- getLatestName name
-   return (Named name' inst)
+-- variableRenameInstLHS :: Named Inst -> State VariableRenameContext (Named Inst)
+-- variableRenameInstLHS namedInst@(Named name inst) = do
+--    bumpUpCount name
+--    curValToCount <- gets ctxVarToCount
+--    name' <- getLatestName name
+--    return (Named name' inst)
 
 
 -- | Rename RHS & LHS of an instruction correctly
@@ -452,14 +465,23 @@ variableRenameInst :: Named Inst -> State VariableRenameContext [Named Inst]
 variableRenameInst namedinst@(Named name inst) = do
     case inst of
         InstStore (ValueInstRef slot) val -> do
-          valNamed <- renameValue_ val
+          valNamed <- renameStoredValue_ val
           modify (\ctx -> ctx {ctxVarToLatestStoreVal=M.insert slot valNamed (ctxVarToLatestStoreVal ctx)})
           return []
 
         InstLoad (ValueInstRef slot) -> do
-          loadedval <- renameValue_ (ValueInstRef slot)
+          loadedval <- getLatestStoredValue_ slot
           modify (\ctx -> ctx {ctxVarToLatestStoreVal=M.insert name loadedval (ctxVarToLatestStoreVal ctx)})
           return []
+
+        -- | For a phi node, all predecessors should map to phi node name.
+        InstPhi namebbpairs -> do
+            phi' <- forM namedinst variableRenameInstRHS
+            for namebbpairs (\(prevname, prevbbid) ->
+                                modify (\ctx -> (ctx {ctxVarToLatestStoreVal=M.insert name  (ValueInstRef name) (ctxVarToLatestStoreVal ctx)})))
+            return [phi']
+
+
 
         -- | We don't need allocs, so delete them
         InstAlloc -> return []
@@ -467,14 +489,14 @@ variableRenameInst namedinst@(Named name inst) = do
         _ -> do
           -- | Rename RHS
           (rhsrenamed :: Named Inst) <- forM namedinst variableRenameInstRHS
-          lhsrenamed <- variableRenameInstLHS rhsrenamed
-          return [lhsrenamed]
+          -- lhsrenamed <- variableRenameInstLHS rhsrenamed
+          return [rhsrenamed]
 
 
 
 -- | Rename the return instruction
 variableRenameRetInst :: RetInst -> State VariableRenameContext (RetInst)
-variableRenameRetInst ret = forRetInstValue renameValue_ ret
+variableRenameRetInst ret = forRetInstValue renameStoredValue_ ret
 
 -- | Rename phi nodes in bb
 variableRenamePhiNodes :: BBId -- ^Current BB Id
@@ -509,7 +531,7 @@ variableRenamePhiNodes curbbid phibbid = do
     renamePhiBinding :: BBId -> (BBId, Value) -> State VariableRenameContext (BBId, Value)
     renamePhiBinding curbbid (bbid, value) = (bbid,)  <$> stateValue'
         where stateValue' = if bbid == curbbid
-                        then renameValue_ value
+                        then renameStoredValue_ value
                         else return value
 
 
@@ -557,7 +579,7 @@ variableRenameAtBB cfg domtree curbbid = do
   -- |         |
   -- |        child <- is dominated by parent, CANNOT assume (y = 1)
   -- | Pull out final states to reset these for each child
-  resetVarMappings
+  -- resetVarMappings
   parentctx <- get
   -- | Rename all instructions at BB
   instructionsRenameAtBB curbbid
