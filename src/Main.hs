@@ -47,6 +47,7 @@ main = do
 
             putStrLn "*** Mem2Reg ***"
             let mem2regprog = transformMem2Reg irprogram
+            putStrLn . prettyableToString $  mem2regprog
 
             putStrLn "*** Original program value ***"
             putStrLn . prettyableToString . runProgram $ irprogram
