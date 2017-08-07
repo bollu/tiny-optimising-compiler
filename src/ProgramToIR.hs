@@ -6,6 +6,8 @@ import Data.Traversable
 import Data.Foldable
 import Control.Monad.State.Strict
 import qualified Data.Tree as T
+import PrettyUtils
+import Data.Text.Prettyprint.Doc as PP
 
 data Builder = Builder {
   -- | The first BB that is present in the module
@@ -74,7 +76,9 @@ getUniqueInstName s = do
     let instNameCounter' = M.insertWith (\_ old -> old + 1) s 0 counts
     modify (\b -> b {instNameCounter=instNameCounter' })
 
-    let curcount = instNameCounter' M.! s
+    let curcount = case M.lookup s instNameCounter' of
+                        Just count -> count
+                        Nothing -> error . docToString $ pretty "no count present for: " <+> pretty s
     if curcount == 0
     then return (Label s)
     else return (Label (s ++ "." ++ show curcount))

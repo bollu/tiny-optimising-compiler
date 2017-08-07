@@ -22,6 +22,7 @@ import qualified Data.Monoid as Monoid
 import qualified Data.Set as S
 import qualified Data.List.NonEmpty as NE
 import Control.Monad.State.Strict
+import Debug.Trace
 
 -- | Represents a graph with `a` as a vertex ID type
 newtype Graph a = Graph { edges :: [(a, a)] }
@@ -409,7 +410,10 @@ bumpUpCount name = do
 getVarCount :: Label Inst -> State VariableRenameContext Int
 getVarCount name = do
     modify (\ctx -> ctx {ctxVarToCount = M.insertWith (\new old -> old) name 0 (ctxVarToCount ctx)})
-    gets (\ctx -> ctxVarToCount ctx M.! name)
+    count <- gets (\ctx -> case M.lookup name (ctxVarToCount ctx) of
+                                Just c -> c
+                                Nothing -> error . docToString $ pretty "getVarCount, unknown name:" <+>  pretty name)
+    return count
 
 getLatestName :: Label Inst -> State VariableRenameContext (Label Inst)
 getLatestName name = do
