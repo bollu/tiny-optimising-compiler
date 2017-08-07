@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 module IRInterpreter(runProgram) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
@@ -6,27 +7,44 @@ import Data.Foldable
 import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import IR
+import Data.Text.Prettyprint.Doc as PP
+import PrettyUtils
 
 
 data Evaluator = Evaluator {
     program :: IRProgram,
     prevbbid :: Maybe BBId,
-    curBB :: BBId,
     valueMap :: M.OrderedMap (Label Inst) Int,
     returnval :: Maybe Int
 }
+instance Pretty Evaluator where
+    pretty Evaluator{..} =pretty "Evaluator" <+> (braces . indent 2) (vcat [pretty "program: ",
+                     indent 2 . pretty $ program,
+                     pretty "prevbb: ",
+                     indent 2 . pretty $ prevbbid,
+                     pretty "valueMap: ",
+                     indent 2 . pretty $ valueMap,
+                     pretty "returnval: ",
+                     indent 2 . pretty $ returnval])
 
 initEvaluator :: IRProgram -> Evaluator
 initEvaluator program = Evaluator {
     program = program,
     prevbbid = Nothing,
-    curBB = (irProgramEntryBBId program),
     valueMap = mempty,
     returnval = Nothing
 }
 
 loadName :: Label Inst -> State Evaluator Int
-loadName name = gets $ (M.! name) . valueMap
+loadName name = gets $ (lookupName name) where
+    lookupName :: Label Inst -> Evaluator -> Int
+    lookupName name evaluator@Evaluator{valueMap=vmap} = case M.lookup name vmap of
+                                Just val -> val
+                                Nothing -> error . docToString $
+                                            vcat [pretty "unable to find mapping to variable:" <+> pretty name,
+                                                  pretty "state: ",
+                                                  pretty evaluator]
+
 
 setValue :: Label Inst -> Int -> State Evaluator ()
 setValue name val =
