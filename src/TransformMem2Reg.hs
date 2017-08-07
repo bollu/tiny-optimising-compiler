@@ -375,21 +375,19 @@ renameInstsInDomSet l l' bbIdToDomSet bbid bbmap =
         renamer _ bb = renameInstsInBB l l' bb
 
 
--- | Take a map and create a unique mapping from a key to each value.
--- | Hold the old key in the place where the new key maps to
--- | Take a map and create a unique mapping from a key to each value
-uniquifyKeys :: Ord k => (Int -> k -> k) -> M.OrderedMap k [a] -> M.OrderedMap k (k, a)
-uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m where
-    uniqifyPerKey_ :: (Int -> k -> k) -> k -> [a] -> [(k, (k, a))]
-    uniqifyPerKey_ uniqf k as = foldMap (uniqifyPerKeyVal_ uniqf k) (zip [1..] as)
-
-    uniqifyPerKeyVal_ :: (Int -> k -> k) -> k -> (Int, a) -> [(k, (k, a))]
-    uniqifyPerKeyVal_ uniqf k (i, a) =  [(uniqf i k, (k, a))]
+-- -- | Take a map and create a unique mapping from a key to each value.
+-- -- | Hold the old key in the place where the new key maps to
+-- -- | Take a map and create a unique mapping from a key to each value
+-- uniquifyKeys :: Ord k => (Int -> k -> k) -> M.OrderedMap k [a] -> M.OrderedMap k (k, a)
+-- uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m where
+--     uniqifyPerKey_ :: (Int -> k -> k) -> k -> [a] -> [(k, (k, a))]
+--     uniqifyPerKey_ uniqf k as = foldMap (uniqifyPerKeyVal_ uniqf k) (zip [1..] as)
+--
+--     uniqifyPerKeyVal_ :: (Int -> k -> k) -> k -> (Int, a) -> [(k, (k, a))]
+--     uniqifyPerKeyVal_ uniqf k (i, a) =  [(uniqf i k, (k, a))]
 
 
 data VariableRenameContext = VariableRenameContext {
-  -- | Map from every instruction to the number of occurences.
-  ctxVarToCount :: M.OrderedMap (Label Inst) Int,
   -- | Map a name to the latest value that was stored in it.
   -- | This is used to collapse load / store in a BB.
   ctxVarToLatestStoreVal :: M.OrderedMap (Label Inst) Value,
@@ -398,25 +396,24 @@ data VariableRenameContext = VariableRenameContext {
 }
 instance Pretty VariableRenameContext where
     pretty (VariableRenameContext{..}) =
-        vcat [pretty "vartocount:", pretty ctxVarToCount,
-              pretty "vartoval:", pretty ctxVarToLatestStoreVal]
+        vcat [pretty "vartoval:", pretty ctxVarToLatestStoreVal]
 
--- | Bump up the count of a variable.
-bumpUpCount :: Label Inst -> State VariableRenameContext ()
-bumpUpCount name = do
-  varToCount <- gets ctxVarToCount
-  -- If a value exists, bump it up. Otherwise set to 0
-  let count' = M.insertWith (\new old -> old + 1) name 0 varToCount
-  modify (\ctx -> ctx {ctxVarToCount=count'})
-
--- | Get the count of a variable.
-getVarCount :: Label Inst -> State VariableRenameContext Int
-getVarCount name = do
-    modify (\ctx -> ctx {ctxVarToCount = M.insertWith (\new old -> old) name 0 (ctxVarToCount ctx)})
-    count <- gets (\ctx -> case M.lookup name (ctxVarToCount ctx) of
-                                Just c -> c
-                                Nothing -> error . docToString $ pretty "getVarCount, unknown name:" <+>  pretty name)
-    return count
+-- -- | Bump up the count of a variable.
+-- bumpUpCount :: Label Inst -> State VariableRenameContext ()
+-- bumpUpCount name = do
+--   varToCount <- gets ctxVarToCount
+--   -- If a value exists, bump it up. Otherwise set to 0
+--   let count' = M.insertWith (\new old -> old + 1) name 0 varToCount
+--   modify (\ctx -> ctx {ctxVarToCount=count'})
+--
+-- -- | Get the count of a variable.
+-- getVarCount :: Label Inst -> State VariableRenameContext Int
+-- getVarCount name = do
+--     modify (\ctx -> ctx {ctxVarToCount = M.insertWith (\new old -> old) name 0 (ctxVarToCount ctx)})
+--     count <- gets (\ctx -> case M.lookup name (ctxVarToCount ctx) of
+--                                 Just c -> c
+--                                 Nothing -> error . docToString $ pretty "getVarCount, unknown name:" <+>  pretty name)
+--     return count
 
 -- getLatestName :: Label Inst -> State VariableRenameContext (Label Inst)
 -- getLatestName name = do
@@ -435,12 +432,17 @@ getVarCount name = do
 --       Just val -> return val
 --       Nothing -> ValueInstRef <$> getLatestName name
 --
+-- NOTE: this is a hack. The correct thing to do is to replace everything in the
+-- BB that refers to this value.
 renameStoredValue_ :: Value -> State VariableRenameContext Value
 renameStoredValue_ v@(ValueConstInt _) = return v
 renameStoredValue_ orig@(ValueInstRef name) = do
     varToValue <- gets ctxVarToLatestStoreVal
     case M.lookup name varToValue of
-      Just val -> return val
+      Just val -> do
+                    if orig == val
+                    then return val
+                    else renameStoredValue_ val
       Nothing -> return orig
 
 getLatestStoredValue_ :: Label Inst -> State VariableRenameContext Value
@@ -503,7 +505,6 @@ variableRenamePhiNodes :: BBId -- ^Current BB Id
                           -> BBId -- ^Phi node BB Id
                           -> State VariableRenameContext ()
 variableRenamePhiNodes curbbid phibbid = do
-    varToCount <- gets ctxVarToCount
     varToValue <- gets ctxVarToLatestStoreVal
     phibb <- gets (\ctx -> (ctxBBMap ctx) M.! phibbid)
     phiBBInsts' <- forM (bbInsts phibb) (\(Named name inst) -> (Named name) <$> (phiRenamer curbbid inst))
@@ -535,6 +536,8 @@ variableRenamePhiNodes curbbid phibbid = do
                         else return value
 
 
+resetVarMappings :: VariableRenameContext -> State VariableRenameContext ()
+resetVarMappings parentctx = modify (\ctx -> ctx { ctxVarToLatestStoreVal=ctxVarToLatestStoreVal parentctx })
 
 -- | Rename all instructions and the return instructoin at a given BB
 instructionsRenameAtBB :: BBId -> State VariableRenameContext ()
@@ -551,15 +554,6 @@ instructionsRenameAtBB curbbid = do
 
   modify (\ctx -> ctx { ctxBBMap=bbmap' })
 
--- | Copy back numbering information from the old context to the new context
-resetNumbering :: VariableRenameContext -> VariableRenameContext -> VariableRenameContext
-resetNumbering oldctx newctx = newctx {
-    ctxVarToLatestStoreVal=ctxVarToLatestStoreVal oldctx,
-    ctxVarToCount=ctxVarToCount oldctx
-}
-
-resetVarMappings :: State VariableRenameContext ()
-resetVarMappings = modify (\ctx -> ctx { ctxVarToLatestStoreVal=mempty })
 
 -- 1. rename instructions
 -- 2. rename phi nodes of children in CFG
@@ -568,18 +562,6 @@ resetVarMappings = modify (\ctx -> ctx { ctxVarToLatestStoreVal=mempty })
 -- | Like seriously, I hate myself a little for *writing* this bastard.
 variableRenameAtBB :: CFG -> DomTree -> BBId -> State VariableRenameContext ()
 variableRenameAtBB cfg domtree curbbid = do
-  -- | 1. Reset variable mappings from your parent because they will
-  -- | No longer hold for the child
-  -- | eg.
-  -- | Parent(y=1)
-  -- |    |      |
-  -- |   (y=2)  (y=3)
-  -- |     \      /
-  -- |      ------
-  -- |         |
-  -- |        child <- is dominated by parent, CANNOT assume (y = 1)
-  -- | Pull out final states to reset these for each child
-  -- resetVarMappings
   parentctx <- get
   -- | Rename all instructions at BB
   instructionsRenameAtBB curbbid
@@ -591,35 +573,33 @@ variableRenameAtBB cfg domtree curbbid = do
 
   let domTreeChildrenIDs = getImmediateChildren domtree curbbid
   forM_ domTreeChildrenIDs (\childid -> do
-
-                                  varToVal <- gets ctxVarToLatestStoreVal
                                   variableRenameAtBB cfg domtree childid)
-  -- | reset these states across children
-  modify (resetNumbering parentctx)
+  resetVarMappings parentctx
   return ()
 
 
 
 
 -- | Rename variables to be unique in the function.
-variableRename_ :: CFG  -- ^ The CFG for the program.
+lowerMemToReg :: CFG  -- ^ The CFG for the program.
                    -> DomTree -- ^Dominator tree for the program.
                    -> BBId -- ^Entry BBId
                    -> M.OrderedMap BBId BasicBlock -- ^Function
                    -> M.OrderedMap BBId BasicBlock
-variableRename_ cfg domtree entrybbid bbmap =
+lowerMemToReg cfg domtree entrybbid bbmap =
     ctxBBMap $ execState (variableRenameAtBB cfg domtree entrybbid) initctx where
       initctx :: VariableRenameContext
-      initctx = VariableRenameContext { ctxVarToCount=mempty,
-                                        ctxBBMap=bbmap,
+      initctx = VariableRenameContext { ctxBBMap=bbmap,
                                         ctxVarToLatestStoreVal=mempty
                                       }
 
+renumber :: BBId -> M.OrderedMap BBId BasicBlock -> M.OrderedMap BBId BasicBlock
+renumber entryBBId prog = prog
 
 transformMem2Reg :: IRProgram -> IRProgram
 transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
                            irProgramEntryBBId=entrybbid} =
-    (IRProgram {irProgramBBMap=bbmap', irProgramEntryBBId=entrybbid}) where
+    (IRProgram {irProgramBBMap=bbmapReg, irProgramEntryBBId=entrybbid}) where
       cfg :: CFG
       cfg =  mkBBGraph bbmap
 
@@ -632,4 +612,6 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
       bbmapWithPhi :: M.OrderedMap BBId BasicBlock
       bbmapWithPhi = (placePhiNodes_ cfg domtree) $ bbmap
 
-      bbmap' = (variableRename_ cfg domtree entrybbid) bbmapWithPhi
+      bbmapReg = (lowerMemToReg cfg domtree entrybbid) bbmapWithPhi
+
+      bbmapNumbered = renumber entrybbid bbmapReg

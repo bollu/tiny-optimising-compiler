@@ -18,7 +18,7 @@ instance Pretty (Label a) where
   pretty (Label s) = pretty s
 
 -- a Value, which can either be a constant, or a reference to an instruction.
-data Value = ValueConstInt Int | ValueInstRef (Label Inst)
+data Value = ValueConstInt Int | ValueInstRef (Label Inst) deriving(Eq)
 
 instance Pretty Value where
   pretty (ValueConstInt i) = pretty i <> pretty "#"
