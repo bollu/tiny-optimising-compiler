@@ -79,7 +79,11 @@ instance Pretty a => Pretty (Named a) where
 -- | Used to identify basic blocks
 type BBId = Label BasicBlock
 -- | A basic block. Single-entry, multiple-exit.
-data BasicBlock = BasicBlock { bbInsts :: [Named Inst], bbRetInst :: RetInst , bbLabel :: Label BasicBlock }
+data BasicBlock = BasicBlock {
+  bbInsts :: [Named Inst],
+  bbRetInst :: RetInst ,
+  bbLabel :: Label BasicBlock
+}
 
 -- | Default basic block.
 defaultBB :: BasicBlock

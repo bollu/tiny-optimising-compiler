@@ -10,6 +10,7 @@ import System.Environment
 import TransformMem2Reg
 import PrettyUtils
 import qualified OrderedMap as M
+import qualified MIPSAsm as MIPS
 
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
