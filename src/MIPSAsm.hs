@@ -22,13 +22,21 @@ type MIPSInst = Doc ()
 -- | a mips register name
 type MIPSRegName = Doc ()
 
+-- | a mips label
+type MIPSLabel = Doc ()
+
 data ASMContext = ASMContext {
     instToReg :: M.OrderedMap (Label Inst) MIPSParam,
-    insts :: [MIPSInst]
+    insts :: [MIPSInst],
+    irprogram :: IRProgram
 }
 
-initASMContext :: ASMContext
-initASMContext = ASMContext mempty mempty
+initASMContext :: IRProgram -> ASMContext
+initASMContext program = ASMContext {
+  instToReg=mempty,
+  insts=mempty,
+  irprogram=program
+}
 
 
 
@@ -57,23 +65,27 @@ compileBinaryOp name v1 v2 = do
     appendMIPSInst $ name <+> p1 <+> p2
 
 -- | Compile Instruction.
-compileInst :: Inst -> State ASMContext ()
-compileInst (InstAlloc) = error "alloc should not be present in SSA"
-compileInst inst@(InstStore _ _) = error . docToString $
+appendInst :: Inst -> State ASMContext ()
+appendInst (InstAlloc) = error "alloc should not be present in SSA"
+appendInst inst@(InstStore _ _) = error . docToString $
     pretty inst <+> pretty "should not be present in SSA"
-compileInst inst@(InstLoad _) = error . docToString $
+appendInst inst@(InstLoad _) = error . docToString $
     pretty inst <+> pretty "should not be present in SSA"
-compileInst inst@(InstAdd v1 v2) =
+appendInst inst@(InstAdd v1 v2) =
     compileBinaryOp (pretty "add") v1 v2
 
 
 -- | compile a ret inst
-compileRetInst :: RetInst -> State ASMContext ()
-compileRetInst (RetInstRet val) = do
+appendRetInst :: RetInst -> State ASMContext ()
+appendRetInst (RetInstRet val) = do
     param <- sValueToParam val
     -- | 1 is the ID of print_int
     compileSetRegisterValue (pretty "$v0") (pretty (1 :: Int))
     compileSetRegisterValue (pretty "$a0") param
+    appendMIPSInst $ pretty "syscall"
+
+    -- | 10 is the ID of terminate
+    compileSetRegisterValue (pretty "$v0") (pretty (10 :: Int))
     appendMIPSInst $ pretty "syscall"
 
 
@@ -90,20 +102,43 @@ valueToParam_ ctx (ValueInstRef name) =
 sValueToParam :: Value -> State ASMContext MIPSParam
 sValueToParam value = gets (\ctx -> valueToParam_ ctx value)
 
--- | append a label to
+entryBBLabel :: State ASMContext (Label BasicBlock)
+entryBBLabel =
+    gets (\ctx -> let
+                    program :: IRProgram
+                    program = irprogram ctx
+
+                    entrybbid :: BBId
+                    entrybbid = irProgramEntryBBId program
+
+                    entrybb :: BasicBlock
+                    entrybb = (irProgramBBMap program) M.! entrybbid
+                  in bbLabel entrybb)
+
+-- | convert a BB label to a MIPSLabel
+compileBBLabel :: Label BasicBlock -> State ASMContext (MIPSLabel)
+compileBBLabel label = do
+    entrylabel <- entryBBLabel
+    -- | Rename entry label to `main`
+    let label' = if entrylabel == label then (Label "main") else label
+    return . pretty . unLabel $ label'
+
+-- | Append a basic block label into the assembly.
 appendBBLabel :: Label BasicBlock -> State ASMContext ()
-appendBBLabel lbl = appendMIPSInst $ pretty (unLabel lbl) <+> pretty ":"
+appendBBLabel lbl = do
+    mipslbl <- compileBBLabel lbl
+    appendMIPSInst $ mipslbl <+> pretty ":"
 
 -- | Compile a Basic Block
 compileBB :: BasicBlock -> State ASMContext ()
 compileBB bb = do
     appendBBLabel (bbLabel bb)
-    for (map namedData (bbInsts bb)) compileInst
-    compileRetInst (bbRetInst bb)
+    for (map namedData (bbInsts bb)) appendInst
+    appendRetInst (bbRetInst bb)
 
 -- | Generate ASM
 generateASM :: IRProgram -> ASMDoc
 generateASM program =
   ASMDoc $ vcat $ insts $ execState (do
     -- | Compile all basic blocks
-    for (M.elems (irProgramBBMap program)) compileBB) initASMContext
+    for (M.elems (irProgramBBMap program)) compileBB) (initASMContext program)
