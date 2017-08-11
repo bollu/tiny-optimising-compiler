@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveAnyClass #-}
-module MIPSAsm where
+module MIPSAsm(generateASM, ASMDoc(..)) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -19,6 +19,9 @@ type MIPSInstName = Doc ()
 -- | a Mips instruction
 type MIPSInst = Doc ()
 
+-- | a mips register name
+type MIPSRegName = Doc ()
+
 data ASMContext = ASMContext {
     instToReg :: M.OrderedMap (Label Inst) MIPSParam,
     insts :: [MIPSInst]
@@ -31,7 +34,14 @@ initASMContext = ASMContext mempty mempty
 
 newtype ASMDoc = ASMDoc { unASMDoc :: Doc () }
 
-data Reg = RegTemp Int | RegZero | RegPC | RegHI | RegLO deriving (Eq, Ord)
+-- | The zero register
+zeroReg :: MIPSRegName
+zeroReg = pretty "$zero"
+
+-- | Compile an instruction that sets a particular register value
+compileSetRegisterValue :: MIPSRegName  -> MIPSParam -> State ASMContext ()
+compileSetRegisterValue regname param =
+    appendMIPSInst $ pretty "ori" <+> regname <+> zeroReg <+> param
 
 
 
@@ -53,7 +63,7 @@ compileInst inst@(InstStore _ _) = error . docToString $
     pretty inst <+> pretty "should not be present in SSA"
 compileInst inst@(InstLoad _) = error . docToString $
     pretty inst <+> pretty "should not be present in SSA"
-compileInst inst@(InstAdd v1 v2) = 
+compileInst inst@(InstAdd v1 v2) =
     compileBinaryOp (pretty "add") v1 v2
 
 
@@ -62,15 +72,16 @@ compileRetInst :: RetInst -> State ASMContext ()
 compileRetInst (RetInstRet val) = do
     param <- sValueToParam val
     -- | 1 is the ID of print_int
-    appendMIPSInst $ pretty "mov $v0 1"
-    appendMIPSInst $ pretty "mov $a0 " <+> param
+    compileSetRegisterValue (pretty "$v0") (pretty (1 :: Int))
+    compileSetRegisterValue (pretty "$a0") param
+    appendMIPSInst $ pretty "syscall"
 
 
 
 -- | Construct a `Param` from `Value
 valueToParam_ :: ASMContext -> Value -> MIPSParam
 valueToParam_ _(ValueConstInt i) = pretty i
-valueToParam_ ctx (ValueInstRef name) = 
+valueToParam_ ctx (ValueInstRef name) =
     case M.lookup name  (instToReg ctx) of
         Just param -> param
         Nothing -> error . docToString $ pretty name <+> pretty "not in instToReg"

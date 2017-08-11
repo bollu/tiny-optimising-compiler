@@ -56,3 +56,6 @@ main = do
             putStrLn "*** Mem2Reg program value ***"
             putStrLn . prettyableToString . runProgram $ mem2regprog
 
+            putStrLn "*** MIPS assembly *** "
+            putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  mem2regprog
+
