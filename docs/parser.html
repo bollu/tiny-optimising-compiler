@@ -1,0 +1,187 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">Parser</span> <span class="kw">where</span>
+
+<span class="kw">import </span><span class="dt">Language</span>
+<span class="kw">import </span><span class="dt">Control.Monad</span> (void)
+
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import </span><span class="dt">Data.HashSet</span> <span class="kw">as</span> <span class="dt">HashSet</span>
+
+<span class="kw">import </span><span class="dt">Text.Trifecta</span> <span class="kw">as</span> <span class="dt">TR</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Token.Highlight</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Token.Style</span>
+<span class="kw">import </span><span class="dt">Text.Trifecta.Delta</span>
+
+<span class="kw">import </span><span class="dt">Text.Parser.Char</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Combinators</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Token</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Expression</span>
+<span class="kw">import </span><span class="dt">Text.Parser.Token</span> (<span class="dt">TokenParsing</span>, natural, parens, reserve)
+<span class="kw">import </span><span class="dt">Text.Parser.Token.Style</span> (emptyOps)
+
+
+<span class="kw">import </span><span class="dt">Data.ByteString.Char8</span> <span class="kw">as</span> <span class="dt">BS</span>
+<span class="kw">import qualified</span> <span class="dt">Text.PrettyPrint.ANSI.Leijen</span> <span class="kw">as</span> <span class="dt">TrifectaPP</span>
+
+<span class="co">-- import Data.Text.Prettyprint.Doc as PP</span>
+(<span class="fu">&lt;??&gt;</span>) <span class="fu">=</span> flip (<span class="fu">&lt;?&gt;</span>)
+
+<span class="co">-- | Syntax rules for parsing variable-looking like identifiers.</span>
+<span class="ot">identStyle ::</span> <span class="dt">IdentifierStyle</span> <span class="dt">Parser</span>
+identStyle <span class="fu">=</span> <span class="dt">IdentifierStyle</span>
+    { _styleName <span class="fu">=</span> <span class="st">&quot;variable&quot;</span>
+    , _styleStart <span class="fu">=</span> lower <span class="fu">&lt;|&gt;</span> char <span class="ch">&#39;_&#39;</span>
+    , _styleLetter <span class="fu">=</span> alphaNum <span class="fu">&lt;|&gt;</span> oneOf <span class="st">&quot;_&#39;#&quot;</span>
+    , _styleReserved <span class="fu">=</span> HashSet.fromList [<span class="st">&quot;define&quot;</span>, <span class="st">&quot;assign&quot;</span>, <span class="st">&quot;if&quot;</span>, <span class="st">&quot;else&quot;</span>, <span class="st">&quot;return&quot;</span>, <span class="st">&quot;*&quot;</span>, <span class="st">&quot;+&quot;</span>, <span class="st">&quot;&lt;&quot;</span>, <span class="st">&quot;&amp;&amp;&quot;</span>]
+    , _styleHighlight <span class="fu">=</span> <span class="dt">Identifier</span>
+    , _styleReservedHighlight <span class="fu">=</span> <span class="dt">ReservedIdentifier</span> }
+
+<span class="co">-- | Parse a variable identifier. Variables start with a lower-case letter or</span>
+<span class="co">-- @_@, followed by a string consisting of alphanumeric characters or @&#39;@, @_@.</span>
+<span class="ot">litp ::</span> <span class="dt">Parser</span> <span class="dt">Literal</span>
+litp <span class="fu">=</span> <span class="st">&quot;varname&quot;</span> <span class="fu">&lt;??&gt;</span> (<span class="dt">Literal</span> <span class="fu">&lt;$&gt;</span> (ident identStyle))
+
+
+<span class="ot">intp ::</span> <span class="dt">Parser</span> <span class="dt">Int</span>
+intp <span class="fu">=</span> fromIntegral <span class="fu">&lt;$&gt;</span> integer
+
+<span class="ot">boolp ::</span> <span class="dt">Parser</span> <span class="dt">Bool</span>
+boolp <span class="fu">=</span> ((const <span class="dt">True</span>) <span class="fu">&lt;$&gt;</span> symbol <span class="st">&quot;true&quot;</span>) <span class="fu">&lt;|&gt;</span> ((const <span class="dt">False</span>) <span class="fu">&lt;$&gt;</span> symbol <span class="st">&quot;false&quot;</span>)
+
+<span class="ot">term   ::</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>
+term    <span class="fu">=</span>  (Text.Parser.Token.parens exprp
+       <span class="fu">&lt;|&gt;</span> <span class="dt">ELiteral</span> () <span class="fu">&lt;$&gt;</span> litp <span class="fu">&lt;|&gt;</span> <span class="dt">EInt</span> () <span class="fu">&lt;$&gt;</span> intp) <span class="fu">&lt;?&gt;</span> <span class="st">&quot;simple expression&quot;</span>
+
+<span class="ot">table  ::</span> [[<span class="dt">Operator</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>]]
+table  <span class="fu">=</span> [[binary <span class="st">&quot;*&quot;</span> <span class="dt">Multiply</span> <span class="dt">AssocLeft</span>],
+          [binary <span class="st">&quot;+&quot;</span> <span class="dt">Plus</span>  <span class="dt">AssocLeft</span>], 
+          [binary <span class="st">&quot;&lt;&quot;</span> <span class="dt">L</span> <span class="dt">AssocLeft</span>],
+          [binary <span class="st">&quot;&amp;&amp;&quot;</span> <span class="dt">And</span> <span class="dt">AssocLeft</span>]]
+
+<span class="ot">binary ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">BinOp</span> <span class="ot">-&gt;</span> <span class="dt">Assoc</span> <span class="ot">-&gt;</span> <span class="dt">Operator</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>
+binary name op assoc <span class="fu">=</span> <span class="dt">Infix</span> p assoc <span class="kw">where</span>
+<span class="ot">    p ::</span> <span class="dt">Parser</span> (<span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span>)
+    p <span class="fu">=</span> <span class="kw">do</span>
+          reserve identStyle name
+          return <span class="fu">$</span> mkBinopExpr op
+<span class="ot">    mkBinopExpr ::</span> <span class="dt">BinOp</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span>
+    mkBinopExpr op lhs rhs <span class="fu">=</span> <span class="dt">EBinOp</span> () lhs op rhs
+
+<span class="ot">binopp ::</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>
+binopp <span class="fu">=</span> buildExpressionParser table term
+
+<span class="ot">exprp ::</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>
+exprp <span class="fu">=</span>  binopp
+
+<span class="ot">ifp ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+ifp <span class="fu">=</span> <span class="kw">do</span>
+  symbol <span class="st">&quot;if&quot;</span>
+  e <span class="ot">&lt;-</span> exprp
+  symbol <span class="st">&quot;{&quot;</span>
+  thenstmts <span class="ot">&lt;-</span> sepEndBy stmtp (symbol <span class="st">&quot;;&quot;</span>)
+  symbol <span class="st">&quot;}&quot;</span>
+  symbol <span class="st">&quot;else&quot;</span>
+
+  symbol <span class="st">&quot;{&quot;</span>
+  elsestmts <span class="ot">&lt;-</span> sepEndBy stmtp (symbol <span class="st">&quot;;&quot;</span>)
+  symbol <span class="st">&quot;}&quot;</span>
+  return <span class="fu">$</span> <span class="dt">If</span> () e thenstmts elsestmts
+
+<span class="ot">whilep ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+whilep <span class="fu">=</span> <span class="kw">do</span>
+  symbol <span class="st">&quot;while&quot;</span>
+  e <span class="ot">&lt;-</span> exprp
+  symbol <span class="st">&quot;{&quot;</span>
+  stmts <span class="ot">&lt;-</span> sepEndBy stmtp (symbol <span class="st">&quot;;&quot;</span>)
+  symbol <span class="st">&quot;}&quot;</span>
+  return <span class="fu">$</span> <span class="dt">While</span> () e stmts
+
+
+<span class="ot">assignp ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+assignp <span class="fu">=</span> <span class="kw">do</span>
+  symbol <span class="st">&quot;assign&quot;</span>
+  name <span class="ot">&lt;-</span> litp
+  symbol <span class="st">&quot;:=&quot;</span>
+  rhs <span class="ot">&lt;-</span> exprp
+  return <span class="fu">$</span> <span class="dt">Assign</span> () name rhs
+
+<span class="ot">definep ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+definep <span class="fu">=</span> <span class="kw">do</span>
+  symbol <span class="st">&quot;define&quot;</span>
+  name <span class="ot">&lt;-</span> litp
+  return <span class="fu">$</span> <span class="dt">Define</span> () name
+
+<span class="ot">retp ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+retp <span class="fu">=</span> <span class="kw">do</span>
+  symbol <span class="st">&quot;return&quot;</span>
+  retexpr <span class="ot">&lt;-</span> exprp
+  return <span class="fu">$</span> <span class="dt">Return</span> () retexpr
+
+<span class="ot">stmtp ::</span> <span class="dt">Parser</span> <span class="dt">Stmt&#39;</span>
+stmtp <span class="fu">=</span> ifp <span class="fu">&lt;|&gt;</span> whilep <span class="fu">&lt;|&gt;</span> assignp <span class="fu">&lt;|&gt;</span> definep <span class="fu">&lt;|&gt;</span> retp
+
+<span class="ot">programp ::</span> <span class="dt">Parser</span> <span class="dt">Program&#39;</span>
+programp <span class="fu">=</span> <span class="dt">Program</span> <span class="fu">&lt;$&gt;</span> sepEndBy1 stmtp (symbol <span class="st">&quot;;&quot;</span>)
+
+
+<span class="co">-- vLow level interface to trifecta</span>
+<span class="ot">parseProgram_ ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Result</span> <span class="dt">Program&#39;</span>
+parseProgram_ string <span class="fu">=</span> TR.parseString (spaces <span class="fu">*&gt;</span> programp) (<span class="dt">Directed</span> (BS.pack string) <span class="dv">0</span> <span class="dv">0</span> <span class="dv">0</span> <span class="dv">0</span>) string
+
+
+
+<span class="co">-- v High level interface</span>
+<span class="kw">type</span> <span class="dt">ErrorString</span> <span class="fu">=</span> <span class="dt">String</span>
+<span class="ot">parseProgram ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">Either</span> <span class="dt">ErrorString</span> <span class="dt">Program&#39;</span>
+parseProgram str <span class="fu">=</span> <span class="kw">case</span> parseProgram_ str <span class="kw">of</span>
+                      <span class="dt">Success</span> a <span class="ot">-&gt;</span> <span class="dt">Right</span> a
+                      <span class="dt">Failure</span> <span class="dt">ErrInfo</span>{ _errDoc <span class="fu">=</span> e } <span class="ot">-&gt;</span> <span class="dt">Left</span> (TrifectaPP.displayS (TrifectaPP.renderPretty <span class="fl">0.8</span> <span class="dv">80</span> e) <span class="st">&quot;&quot;</span>)</code></pre></div>
+</body>
+</html>

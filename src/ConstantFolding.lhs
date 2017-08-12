@@ -1,3 +1,4 @@
+\begin{code}
 module ConstantFolding where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
@@ -14,3 +15,4 @@ import PrettyUtils
 
 constantFold :: IRProgram -> IRProgram
 constantFold (program) = 
+\end{code}

@@ -1,0 +1,299 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">ProgramToIR</span> <span class="kw">where</span>
+<span class="kw">import </span><span class="dt">Language</span>
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Tree</span> <span class="kw">as</span> <span class="dt">T</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+
+<span class="kw">data</span> <span class="dt">Builder</span> <span class="fu">=</span> <span class="dt">Builder</span> {
+  <span class="co">-- | The first BB that is present in the module</span>
+<span class="ot">  entryBBId ::</span> <span class="dt">BBId</span>,
+ <span class="co">-- | The BB the builder is currently focused on</span>
+<span class="ot">  currentBBId ::</span> <span class="dt">BBId</span>,
+  <span class="co">-- | Mapping from BBId to BasicBlock</span>
+<span class="ot">  bbIdToBB ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>,
+  <span class="co">-- | counter to generate new instruction name</span>
+<span class="ot">  tmpInstNamesCounter ::</span> <span class="dt">Int</span>,
+  <span class="co">-- | Map from name to count of number of times name has occured</span>
+<span class="ot">  instNameCounter ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> <span class="dt">Int</span>,
+  <span class="co">-- | Map from literal name to Value</span>
+<span class="ot">  literalToValue ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">Literal</span> <span class="dt">Value</span>
+}
+
+<span class="co">-- | Create a new builder with an empty basic block</span>
+<span class="ot">newBuilder ::</span> <span class="dt">Builder</span>
+newBuilder <span class="fu">=</span>
+  execState mkDefaultBB initbuilder
+    <span class="kw">where</span>
+      mkDefaultBB <span class="fu">=</span> <span class="kw">do</span>
+        bbid <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;default&quot;</span>)
+        focusBB bbid
+        <span class="co">-- Set the &quot;entry&quot; basic block so we can later give it to IRProgram</span>
+        modify (\b <span class="ot">-&gt;</span> b { entryBBId <span class="fu">=</span> bbid })
+
+      initbuilder <span class="fu">=</span> (<span class="dt">Builder</span> {
+        entryBBId <span class="fu">=</span> <span class="dt">Label</span> <span class="st">&quot;&quot;</span>,
+        currentBBId <span class="fu">=</span> <span class="dt">Label</span> <span class="st">&quot;&quot;</span>,
+        bbIdToBB <span class="fu">=</span> mempty,
+        tmpInstNamesCounter<span class="fu">=</span><span class="dv">0</span>,
+        instNameCounter<span class="fu">=</span>mempty,
+        literalToValue<span class="fu">=</span>mempty
+    })
+
+<span class="co">-- | Get the current Basic block ID</span>
+<span class="ot">getCurrentBBId ::</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">BBId</span>
+getCurrentBBId <span class="fu">=</span> gets currentBBId
+
+<span class="co">-- | Focus the basic block given by the ID</span>
+<span class="ot">focusBB ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+focusBB id <span class="fu">=</span> modify (\b<span class="ot">-&gt;</span> b { currentBBId<span class="fu">=</span>id })
+
+<span class="co">-- | Append a new basic block. DOES NOT switch the currentBBId to the new basic block. For that, see focusBB</span>
+<span class="ot">createNewBB ::</span> <span class="dt">Label</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">BBId</span>
+createNewBB name <span class="fu">=</span> <span class="kw">do</span>
+  idtobbs <span class="ot">&lt;-</span> gets bbIdToBB
+  <span class="kw">let</span> nbbs <span class="fu">=</span> M.size idtobbs
+  <span class="kw">let</span> nameunique <span class="fu">=</span> <span class="dt">Label</span> ((unLabel name) <span class="fu">++</span> <span class="st">&quot;.&quot;</span> <span class="fu">++</span> show nbbs)
+  <span class="kw">let</span> newbb <span class="fu">=</span> defaultBB { bbLabel<span class="fu">=</span>nameunique }
+  modify (\b <span class="ot">-&gt;</span> b { bbIdToBB <span class="fu">=</span> M.insert nameunique newbb idtobbs  } )
+  return nameunique
+
+
+<span class="co">-- | Create a temporary instruction name.</span>
+<span class="ot">getTempInstName ::</span> <span class="dt">State</span> <span class="dt">Builder</span> (<span class="dt">Label</span> <span class="dt">Inst</span>)
+getTempInstName <span class="fu">=</span> <span class="kw">do</span>
+  n <span class="ot">&lt;-</span> gets tmpInstNamesCounter
+  modify (\b <span class="ot">-&gt;</span> b { tmpInstNamesCounter<span class="fu">=</span>n<span class="fu">+</span><span class="dv">1</span> })
+  return <span class="fu">.</span> <span class="dt">Label</span> <span class="fu">$</span> <span class="st">&quot;tmp.&quot;</span> <span class="fu">++</span> show n
+
+<span class="ot">getUniqueInstName ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> (<span class="dt">Label</span> <span class="dt">Inst</span>)
+getUniqueInstName s <span class="fu">=</span> <span class="kw">do</span>
+    counts <span class="ot">&lt;-</span> gets instNameCounter
+    <span class="kw">let</span> instNameCounter&#39; <span class="fu">=</span> M.insertWith (\_ old <span class="ot">-&gt;</span> old <span class="fu">+</span> <span class="dv">1</span>) s <span class="dv">0</span> counts
+    modify (\b <span class="ot">-&gt;</span> b {instNameCounter<span class="fu">=</span>instNameCounter&#39; })
+
+    <span class="kw">let</span> curcount <span class="fu">=</span> <span class="kw">case</span> M.lookup s instNameCounter&#39; <span class="kw">of</span>
+                        <span class="dt">Just</span> count <span class="ot">-&gt;</span> count
+                        <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;no count present for: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty s
+    <span class="kw">if</span> curcount <span class="fu">==</span> <span class="dv">0</span>
+    <span class="kw">then</span> return (<span class="dt">Label</span> s)
+    <span class="kw">else</span> return (<span class="dt">Label</span> (s <span class="fu">++</span> <span class="st">&quot;.&quot;</span> <span class="fu">++</span> show curcount))
+
+
+
+<span class="co">-- | Create a temporary name for a return instruction</span>
+<span class="co">-- | Note that we cheat in the implementation, by just &quot;relabelling&quot;</span>
+<span class="co">-- | an instruction label to a ret instruction label.</span>
+<span class="ot">getTempRetInstName ::</span> <span class="dt">State</span> <span class="dt">Builder</span> (<span class="dt">Label</span> <span class="dt">RetInst</span>)
+getTempRetInstName <span class="fu">=</span> <span class="dt">Label</span> <span class="fu">.</span> unLabel <span class="fu">&lt;$&gt;</span> getTempInstName
+
+<span class="co">-- | Add a mapping between literal and value.</span>
+<span class="ot">mapLiteralToValue ::</span> <span class="dt">Literal</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+mapLiteralToValue l v <span class="fu">=</span> <span class="kw">do</span>
+  ltov <span class="ot">&lt;-</span> gets literalToValue
+  <span class="co">-- TODO: check that we do not repeat literals.</span>
+  modify (\b <span class="ot">-&gt;</span> b { literalToValue<span class="fu">=</span>M.insert l v ltov })
+  return ()
+
+<span class="co">-- | Get the value that the Literal maps to.</span>
+<span class="ot">getLiteralValueMapping ::</span> <span class="dt">Literal</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">Value</span>
+getLiteralValueMapping lit <span class="fu">=</span> <span class="kw">do</span>
+  ltov <span class="ot">&lt;-</span> gets literalToValue
+  return <span class="fu">$</span> ltov <span class="fu">M.!</span> lit
+
+<span class="co">-- | lift an edit of a basic block to the current basic block focused</span>
+<span class="co">-- | in the Builder.</span>
+<span class="ot">liftBBEdit ::</span> (<span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>) <span class="ot">-&gt;</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
+liftBBEdit f builder <span class="fu">=</span> builder {
+    bbIdToBB <span class="fu">=</span> M.adjust f (currentBBId builder) (bbIdToBB builder)
+}
+
+<span class="co">-- | Set the builder&#39;s current basic block to the i&#39;th basic block</span>
+<span class="ot">setBB ::</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
+setBB builder i <span class="fu">=</span> builder {
+  currentBBId <span class="fu">=</span> i
+}
+
+
+<span class="co">-- | Append instruction &quot;I&quot; to the builder</span>
+<span class="ot">appendInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">Value</span>
+appendInst i <span class="fu">=</span> <span class="kw">do</span>
+  modify <span class="fu">.</span> liftBBEdit <span class="fu">$</span> (appendInstToBB i)
+  return <span class="fu">$</span> <span class="dt">ValueInstRef</span> (namedName i)
+  <span class="kw">where</span>
+<span class="ot">    appendInstToBB ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+    appendInstToBB i bb <span class="fu">=</span> bb { bbInsts<span class="fu">=</span>bbInsts bb <span class="fu">++</span> [i] }
+
+<span class="ot">setRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+setRetInst i <span class="fu">=</span> <span class="kw">do</span>
+  modify <span class="fu">.</span> liftBBEdit <span class="fu">$</span> (setBBRetInst i)
+  <span class="kw">where</span>
+<span class="ot">    setBBRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+    setBBRetInst i bb <span class="fu">=</span> bb { bbRetInst<span class="fu">=</span>i }
+
+
+<span class="ot">mkBinOpInst ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">BinOp</span> <span class="ot">-&gt;</span>  <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
+mkBinOpInst lhs <span class="dt">Plus</span> rhs <span class="fu">=</span> <span class="dt">InstAdd</span> lhs rhs
+mkBinOpInst lhs <span class="dt">Multiply</span> rhs <span class="fu">=</span> <span class="dt">InstMul</span> lhs rhs
+mkBinOpInst lhs <span class="dt">L</span> rhs <span class="fu">=</span> <span class="dt">InstL</span> lhs rhs
+mkBinOpInst lhs <span class="dt">And</span> rhs <span class="fu">=</span> <span class="dt">InstAnd</span> lhs rhs
+
+<span class="ot">buildExpr ::</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">Value</span>
+buildExpr (<span class="dt">EInt</span> _ i) <span class="fu">=</span> return <span class="fu">$</span>  <span class="dt">ValueConstInt</span> i
+buildExpr (<span class="dt">ELiteral</span> _ lit) <span class="fu">=</span> <span class="kw">do</span>
+    name <span class="ot">&lt;-</span> getUniqueInstName <span class="fu">$</span> unLiteral lit <span class="fu">++</span> <span class="st">&quot;.load&quot;</span>
+    val <span class="ot">&lt;-</span> getLiteralValueMapping lit
+    appendInst <span class="fu">$</span> name <span class="fu">=:=</span>  <span class="dt">InstLoad</span> val
+
+buildExpr (<span class="dt">EBinOp</span> _ lhs op rhs) <span class="fu">=</span> <span class="kw">do</span>
+    lhs <span class="ot">&lt;-</span> buildExpr lhs
+    rhs <span class="ot">&lt;-</span> buildExpr rhs
+    <span class="kw">let</span> inst <span class="fu">=</span> (mkBinOpInst lhs op rhs)
+    name <span class="ot">&lt;-</span> getTempInstName
+    <span class="co">-- TODO: generate fresh labels</span>
+    appendInst <span class="fu">$</span> name <span class="fu">=:=</span> inst
+
+<span class="co">-- | Build the IR for the assignment, and return a reference to @InstStore</span>
+<span class="co">-- | TODO: technically, store should not return a Value</span>
+<span class="ot">buildAssign ::</span> <span class="dt">Literal</span> <span class="ot">-&gt;</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">Value</span>
+buildAssign lit expr <span class="fu">=</span> <span class="kw">do</span>
+  exprval <span class="ot">&lt;-</span> buildExpr expr
+  litval <span class="ot">&lt;-</span> getLiteralValueMapping lit
+  name <span class="ot">&lt;-</span> getUniqueInstName <span class="fu">$</span> <span class="st">&quot;_&quot;</span>
+  <span class="co">-- TODO: do not allow Store to be named with type system trickery</span>
+  appendInst <span class="fu">$</span> name <span class="fu">=:=</span> <span class="dt">InstStore</span> litval exprval
+  return <span class="fu">$</span> <span class="dt">ValueInstRef</span> name
+
+<span class="co">-- | Build IR for &quot;define x&quot;</span>
+<span class="ot">buildDefine ::</span> <span class="dt">Literal</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">Value</span>
+buildDefine lit <span class="fu">=</span> <span class="kw">do</span>
+  name <span class="ot">&lt;-</span> getUniqueInstName <span class="fu">.</span> unLiteral <span class="fu">$</span> lit
+  mapLiteralToValue lit (<span class="dt">ValueInstRef</span> name)
+  appendInst <span class="fu">$</span> name <span class="fu">=:=</span> <span class="dt">InstAlloc</span>
+
+<span class="co">-- | Build IR for &quot;Return&quot;</span>
+<span class="ot">buildRet ::</span> <span class="dt">Expr&#39;</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+buildRet retexpr <span class="fu">=</span> <span class="kw">do</span>
+  retval <span class="ot">&lt;-</span> buildExpr retexpr
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstRet</span> retval
+
+<span class="co">-- | Build IR for &quot;Stmt&quot;</span>
+<span class="ot">buildStmt ::</span> <span class="dt">Stmt&#39;</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+buildStmt (<span class="dt">Define</span> _ lit) <span class="fu">=</span> buildDefine lit <span class="fu">&gt;&gt;</span> return ()
+buildStmt (<span class="dt">Assign</span> _ lit expr) <span class="fu">=</span> buildAssign lit expr <span class="fu">&gt;&gt;</span> return ()
+buildStmt (<span class="dt">If</span> _ cond then&#39; else&#39;) <span class="fu">=</span> <span class="kw">do</span>
+  condval <span class="ot">&lt;-</span> buildExpr cond
+  currbb <span class="ot">&lt;-</span> getCurrentBBId
+
+
+  bbthen <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;then&quot;</span>)
+  focusBB bbthen
+  stmtsToInsts then&#39;
+
+  bbelse <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;else&quot;</span>)
+  focusBB bbelse
+  stmtsToInsts else&#39;
+
+  bbjoin <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;join&quot;</span>)
+  focusBB bbthen
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstBranch</span> bbjoin
+
+  focusBB bbelse
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstBranch</span> bbjoin
+
+  focusBB currbb
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstConditionalBranch</span> condval bbthen bbelse
+
+  focusBB bbjoin
+
+buildStmt (<span class="dt">While</span> _ cond body) <span class="fu">=</span> <span class="kw">do</span>
+  curbb <span class="ot">&lt;-</span> getCurrentBBId
+  condbb <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;while.cond&quot;</span>)
+  bodybb <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;while.body&quot;</span>)
+  endbb <span class="ot">&lt;-</span> createNewBB (<span class="dt">Label</span> <span class="st">&quot;while.end&quot;</span>)
+
+  focusBB condbb
+  condval <span class="ot">&lt;-</span> buildExpr cond
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstConditionalBranch</span> condval bodybb endbb
+
+  focusBB bodybb
+  stmtsToInsts body
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstBranch</span> condbb
+
+  focusBB curbb
+  setRetInst <span class="fu">$</span> <span class="dt">RetInstBranch</span> condbb
+
+  focusBB endbb
+
+buildStmt (<span class="dt">Return</span> _ retexpr) <span class="fu">=</span> buildRet retexpr
+
+<span class="co">-- Given a collection of statements, create a State that will create these</span>
+<span class="co">-- statements in the builder</span>
+<span class="ot">stmtsToInsts ::</span> [<span class="dt">Stmt&#39;</span>] <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+stmtsToInsts stmts <span class="fu">=</span> (for_ stmts buildStmt)
+
+
+<span class="ot">programToIR ::</span> <span class="dt">Program&#39;</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+programToIR (<span class="dt">Program</span> stmts) <span class="fu">=</span>
+  <span class="dt">IRProgram</span> {
+    irProgramBBMap <span class="fu">=</span> bbIdToBB  builder,
+    irProgramEntryBBId <span class="fu">=</span> entryBBId builder
+  } <span class="kw">where</span>
+      builder <span class="fu">=</span> execState (stmtsToInsts stmts) newBuilder
+
+
+<span class="kw">type</span> <span class="dt">DominatorTree</span> <span class="fu">=</span> <span class="dt">T.Tree</span> <span class="dt">BBId</span></code></pre></div>
+</body>
+</html>

@@ -1,3 +1,4 @@
+\begin{code}
 {-# LANGUAGE RecordWildCards #-}
 module IRInterpreter(runProgram) where
 import qualified OrderedMap as M
@@ -108,3 +109,4 @@ evaluateBB bbid = do
 
 runProgram :: IRProgram -> Maybe Int
 runProgram program = returnval $ execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)
+\end{code}

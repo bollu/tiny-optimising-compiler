@@ -1,0 +1,110 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">Main</span> <span class="kw">where</span>
+<span class="kw">import </span><span class="dt">Parser</span>
+<span class="kw">import qualified</span> <span class="dt">IR</span> <span class="kw">as</span> <span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">IRInterpreter</span>
+<span class="kw">import qualified</span> <span class="dt">Language</span> <span class="kw">as</span> <span class="dt">Lang</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span>
+<span class="kw">import </span><span class="dt">ProgramToIR</span>
+<span class="kw">import </span><span class="dt">System.IO</span>
+<span class="kw">import </span><span class="dt">System.Environment</span>
+<span class="kw">import </span><span class="dt">TransformMem2Reg</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import qualified</span> <span class="dt">MIPSAsm</span> <span class="kw">as</span> <span class="dt">MIPS</span>
+
+
+<span class="ot">compileProgram ::</span> <span class="dt">Lang.Program</span> a <span class="ot">-&gt;</span>  <span class="dt">IR.IRProgram</span>
+compileProgram p <span class="fu">=</span> undefined
+
+<span class="ot">main ::</span> <span class="dt">IO</span> ()
+main <span class="fu">=</span> <span class="kw">do</span>
+     args <span class="ot">&lt;-</span> getArgs
+     input <span class="ot">&lt;-</span> readFile (args <span class="fu">!!</span> <span class="dv">0</span>)
+     <span class="kw">case</span> parseProgram input <span class="kw">of</span>
+        <span class="dt">Left</span> err <span class="ot">-&gt;</span> putStrLn err
+        <span class="dt">Right</span> program <span class="ot">-&gt;</span> <span class="kw">do</span>
+            putStrLn <span class="st">&quot;*** Program:&quot;</span>
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span>  program
+
+            putStrLn <span class="st">&quot;*** IR:&quot;</span>
+            <span class="kw">let</span> irprogram <span class="fu">=</span>  programToIR program
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span> irprogram
+
+            <span class="kw">let</span> cfg <span class="fu">=</span> mkBBGraph <span class="fu">.</span> IR.irProgramBBMap <span class="fu">$</span><span class="ot"> irprogram ::</span> <span class="dt">CFG</span>
+
+            putStrLn <span class="st">&quot;*** Dom info:&quot;</span>
+            <span class="kw">let</span> dominatorInfo <span class="fu">=</span> constructBBDominators irprogram
+            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> pretty <span class="fu">$</span> dominatorInfo
+
+            putStrLn <span class="st">&quot;*** Dominator tree: &quot;</span>
+            <span class="kw">let</span> dominatorTree <span class="fu">=</span> constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span> dominatorTree
+
+            putStrLn <span class="st">&quot;*** Dominance Frontiers: &quot;</span>
+            <span class="kw">let</span> domfrontiers <span class="fu">=</span> fmap (\bbid <span class="ot">-&gt;</span> (bbid, getDominanceFrontier dominatorTree cfg bbid))
+                                    (M.keys <span class="fu">.</span> IR.irProgramBBMap <span class="fu">$</span> irprogram)<span class="ot"> ::</span> [(<span class="dt">IR.BBId</span>, [<span class="dt">IR.BBId</span>])]
+            putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> vcat (fmap pretty domfrontiers)
+
+
+            putStrLn <span class="st">&quot;*** Mem2Reg ***&quot;</span>
+            <span class="kw">let</span> mem2regprog <span class="fu">=</span> transformMem2Reg irprogram
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span>  mem2regprog
+
+            putStrLn <span class="st">&quot;*** Original program value ***&quot;</span>
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">.</span> runProgram <span class="fu">$</span> irprogram
+
+            putStrLn <span class="st">&quot;*** Mem2Reg program value ***&quot;</span>
+            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">.</span> runProgram <span class="fu">$</span> mem2regprog
+
+            putStrLn <span class="st">&quot;*** MIPS assembly *** &quot;</span>
+            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> MIPS.unASMDoc <span class="fu">.</span> MIPS.generateASM <span class="fu">$</span>  mem2regprog</code></pre></div>
+</body>
+</html>

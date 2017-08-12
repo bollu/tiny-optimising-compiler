@@ -1,3 +1,9 @@
+<h1>  Internal Representation </h1>
+
+In this module, we define the LLVM-like IR that we compile our
+source code to.
+
+\begin{code}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
@@ -8,6 +14,7 @@ import qualified Language as L
 import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
 import Data.Functor.Identity
+import Data.Traversable
 
 data SSA
 data NotSSA
@@ -129,20 +136,4 @@ data IRProgram = IRProgram {
 instance Pretty IRProgram where
   pretty (IRProgram bbmap entryId) = vsep $ [pretty "entry: " <+> pretty entryId, pretty "program: "] ++
                                             fmap pretty (M.elems bbmap)
-
-
-forInstsInBB :: Applicative f =>BasicBlock -> (Named Inst -> f (Named Inst)) ->  f BasicBlock
-forInstsInBB  bb f =  bb { bbInsts= for (bbInsts bb) f}
-
-
-
--- Apply an effect for each BB in the program
-forBBs :: Applicative f => Program -> (BasicBlock -> f BasicBlock) -> f IRProgram
-forBBs program f = program { irProgramBBMap = for bbmap f} where
-  bbmap = irProgramBBMap program
-
-forBBsPure :: IRProgram -> 
-
--- Replace all uses of inst `inst` with the value given
-replaceAllUsesOfInst :: Label Inst -> Value -> IRProgram -> IRProgram
-replaceAllUsesOfInst name val program = forBBs program
+\end{code}

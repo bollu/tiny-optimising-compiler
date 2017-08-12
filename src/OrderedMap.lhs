@@ -1,3 +1,4 @@
+\begin{code}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -129,3 +130,4 @@ mapWithKey f = liftMapEdit_ (M.mapWithKey f)
 
 delete :: Ord k =>  k -> OrderedMap k a -> OrderedMap k a
 delete key omap@OrderedMap{..} = OrderedMap {order=L.delete key order, map'=M.delete key map' }
+\end{code}

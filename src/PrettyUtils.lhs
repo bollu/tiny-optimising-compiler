@@ -1,3 +1,4 @@
+\begin{code}
 module PrettyUtils where
 import Data.Text.Prettyprint.Doc.Render.Text
 import Data.Text.Prettyprint.Doc
@@ -13,3 +14,4 @@ prettyableToText a = docToText (pretty a)
 
 prettyableToString :: Pretty a => a -> String
 prettyableToString  a = docToString (pretty a)
+\end{code}

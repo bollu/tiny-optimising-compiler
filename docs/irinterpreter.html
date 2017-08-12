@@ -1,0 +1,160 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE RecordWildCards #-}</span>
+<span class="kw">module</span> <span class="dt">IRInterpreter</span>(runProgram) <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+
+
+<span class="kw">data</span> <span class="dt">Evaluator</span> <span class="fu">=</span> <span class="dt">Evaluator</span> {
+<span class="ot">    program ::</span> <span class="dt">IRProgram</span>,
+<span class="ot">    prevbbid ::</span> <span class="dt">Maybe</span> <span class="dt">BBId</span>,
+<span class="ot">    valueMap ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="dt">Int</span>,
+<span class="ot">    returnval ::</span> <span class="dt">Maybe</span> <span class="dt">Int</span>
+}
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">Evaluator</span> <span class="kw">where</span>
+    pretty <span class="dt">Evaluator</span>{<span class="fu">..</span>} <span class="fu">=</span>pretty <span class="st">&quot;Evaluator&quot;</span> <span class="fu">&lt;+&gt;</span> (braces <span class="fu">.</span> indent <span class="dv">2</span>) (vcat [pretty <span class="st">&quot;program: &quot;</span>,
+                     indent <span class="dv">2</span> <span class="fu">.</span> pretty <span class="fu">$</span> program,
+                     pretty <span class="st">&quot;prevbb: &quot;</span>,
+                     indent <span class="dv">2</span> <span class="fu">.</span> pretty <span class="fu">$</span> prevbbid,
+                     pretty <span class="st">&quot;valueMap: &quot;</span>,
+                     indent <span class="dv">2</span> <span class="fu">.</span> pretty <span class="fu">$</span> valueMap,
+                     pretty <span class="st">&quot;returnval: &quot;</span>,
+                     indent <span class="dv">2</span> <span class="fu">.</span> pretty <span class="fu">$</span> returnval])
+
+<span class="ot">initEvaluator ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">Evaluator</span>
+initEvaluator program <span class="fu">=</span> <span class="dt">Evaluator</span> {
+    program <span class="fu">=</span> program,
+    prevbbid <span class="fu">=</span> <span class="dt">Nothing</span>,
+    valueMap <span class="fu">=</span> mempty,
+    returnval <span class="fu">=</span> <span class="dt">Nothing</span>
+}
+
+<span class="ot">loadName ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> <span class="dt">Int</span>
+loadName name <span class="fu">=</span> gets <span class="fu">$</span> (lookupName name) <span class="kw">where</span>
+<span class="ot">    lookupName ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Evaluator</span> <span class="ot">-&gt;</span> <span class="dt">Int</span>
+    lookupName name evaluator<span class="fu">@</span><span class="dt">Evaluator</span>{valueMap<span class="fu">=</span>vmap} <span class="fu">=</span> <span class="kw">case</span> M.lookup name vmap <span class="kw">of</span>
+                                <span class="dt">Just</span> val <span class="ot">-&gt;</span> val
+                                <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
+                                            vcat [pretty <span class="st">&quot;unable to find mapping to variable:&quot;</span> <span class="fu">&lt;+&gt;</span> pretty name,
+                                                  pretty <span class="st">&quot;state: &quot;</span>,
+                                                  pretty evaluator]
+
+
+<span class="ot">setValue ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> ()
+setValue name val <span class="fu">=</span>
+    modify (\ctx <span class="ot">-&gt;</span> ctx { valueMap<span class="fu">=</span>M.insert name val (valueMap ctx) })
+
+<span class="ot">getValue ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> <span class="dt">Int</span>
+getValue (<span class="dt">ValueConstInt</span> i) <span class="fu">=</span> return i
+getValue (<span class="dt">ValueInstRef</span> name) <span class="fu">=</span> loadName name
+
+<span class="ot">getPreviousBBId ::</span> <span class="dt">State</span> <span class="dt">Evaluator</span> <span class="dt">BBId</span>
+getPreviousBBId <span class="fu">=</span> <span class="kw">do</span>
+    prevbb <span class="ot">&lt;-</span> gets prevbbid
+    <span class="kw">case</span> prevbb <span class="kw">of</span>
+        <span class="dt">Just</span> id&#39; <span class="ot">-&gt;</span> return id&#39;
+        <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="st">&quot;no previous BB id found.&quot;</span>
+
+<span class="ot">evaluateInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> ()
+evaluateInst namedinst<span class="fu">@</span>(<span class="dt">Named</span> lhsname inst) <span class="fu">=</span> <span class="kw">do</span>
+    <span class="kw">case</span> inst <span class="kw">of</span>
+        <span class="dt">InstAlloc</span> <span class="ot">-&gt;</span> return ()
+        <span class="dt">InstLoad</span> slot <span class="ot">-&gt;</span> getValue slot <span class="fu">&gt;&gt;=</span> setValue lhsname
+        <span class="dt">InstStore</span> (<span class="dt">ValueInstRef</span> slotname) val <span class="ot">-&gt;</span> getValue val <span class="fu">&gt;&gt;=</span> setValue slotname
+        <span class="dt">InstAdd</span> l r <span class="ot">-&gt;</span> liftA2 (<span class="fu">+</span>) (getValue l) (getValue r) <span class="fu">&gt;&gt;=</span> setValue lhsname
+        <span class="dt">InstMul</span> l r <span class="ot">-&gt;</span> liftA2 (<span class="fu">*</span>) (getValue l) (getValue r) <span class="fu">&gt;&gt;=</span> setValue lhsname
+        <span class="dt">InstL</span> l r <span class="ot">-&gt;</span> liftA2 (\l r <span class="ot">-&gt;</span> <span class="kw">if</span> l <span class="fu">&lt;</span> r <span class="kw">then</span> <span class="dv">1</span> <span class="kw">else</span> <span class="dv">0</span>) (getValue l) (getValue r) <span class="fu">&gt;&gt;=</span> setValue lhsname
+        <span class="dt">InstAnd</span> l r <span class="ot">-&gt;</span> liftA2 (\l r <span class="ot">-&gt;</span> l <span class="fu">*</span> r) (getValue l) (getValue r) <span class="fu">&gt;&gt;=</span> setValue lhsname
+        <span class="dt">InstPhi</span> bbidValuePairs <span class="ot">-&gt;</span> <span class="kw">do</span>
+                prevbbid <span class="ot">&lt;-</span> getPreviousBBId
+                getValue (snd (getCurrentBBIdValue prevbbid))  <span class="fu">&gt;&gt;=</span> setValue lhsname
+            <span class="kw">where</span>
+<span class="ot">                pred ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+                pred prevbbid (bbid, _) <span class="fu">=</span> bbid <span class="fu">==</span> prevbbid
+
+<span class="ot">                getCurrentBBIdValue ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>)
+                getCurrentBBIdValue prevbbid <span class="fu">=</span> head <span class="fu">.</span> NE.filter (pred prevbbid) <span class="fu">$</span> bbidValuePairs
+
+
+<span class="ot">followRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> (<span class="dt">Maybe</span> <span class="dt">BBId</span>)
+followRetInst (<span class="dt">RetInstTerminal</span>) <span class="fu">=</span> return <span class="dt">Nothing</span>
+followRetInst (<span class="dt">RetInstBranch</span> bbid) <span class="fu">=</span> return (<span class="dt">Just</span> bbid)
+followRetInst (<span class="dt">RetInstConditionalBranch</span> val t e) <span class="fu">=</span> <span class="kw">do</span>
+    valInt <span class="ot">&lt;-</span> getValue val
+    <span class="kw">if</span> valInt <span class="fu">==</span> <span class="dv">1</span>
+    <span class="kw">then</span> return (<span class="dt">Just</span> t)
+    <span class="kw">else</span> return (<span class="dt">Just</span> e)
+followRetInst (<span class="dt">RetInstRet</span> retval) <span class="fu">=</span> <span class="kw">do</span>
+    retvalInt <span class="ot">&lt;-</span> getValue retval
+    modify (\evaluator <span class="ot">-&gt;</span> evaluator { returnval<span class="fu">=</span><span class="dt">Just</span> retvalInt})
+    return <span class="dt">Nothing</span>
+
+<span class="ot">evaluateBB ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> ()
+evaluateBB bbid <span class="fu">=</span> <span class="kw">do</span>
+    bb <span class="ot">&lt;-</span> gets <span class="fu">$</span> (<span class="fu">M.!</span> bbid) <span class="fu">.</span> irProgramBBMap <span class="fu">.</span> program
+    for (bbInsts bb) evaluateInst
+    nextid <span class="ot">&lt;-</span> followRetInst (bbRetInst bb)
+    modify (\evaluator <span class="ot">-&gt;</span> evaluator {prevbbid<span class="fu">=</span><span class="dt">Just</span> bbid})
+
+    <span class="kw">case</span> nextid <span class="kw">of</span>
+        <span class="dt">Nothing</span> <span class="ot">-&gt;</span> return ()
+        <span class="dt">Just</span> nextid <span class="ot">-&gt;</span> evaluateBB nextid
+
+<span class="ot">runProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Int</span>
+runProgram program <span class="fu">=</span> returnval <span class="fu">$</span> execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)</code></pre></div>
+</body>
+</html>

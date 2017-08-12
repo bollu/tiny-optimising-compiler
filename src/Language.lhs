@@ -1,3 +1,4 @@
+\begin{code}
 module Language where
 import Data.Text.Prettyprint.Doc as PP
 
@@ -36,8 +37,8 @@ nestDepth :: Int
 nestDepth = 4
 
 instance Pretty (Stmt a) where
-  pretty (If _ cond then' else') = pretty "if" <+> pretty cond <+> 
-                                  PP.braces (nest 4 (pretty then')) <+> 
+  pretty (If _ cond then' else') = pretty "if" <+> pretty cond <+>
+                                  PP.braces (nest 4 (pretty then')) <+>
                                   PP.braces (nest 4 (pretty else'))
 
   pretty (While _ cond body) = pretty "while" <+> pretty cond <+> PP.braces (nest 4 (pretty body))
@@ -53,3 +54,4 @@ type Program' = Program ()
 
 instance Pretty (Program a) where
   pretty (Program stmts) = vcat (map pretty stmts)
+\end{code}

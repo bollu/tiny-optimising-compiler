@@ -1,3 +1,4 @@
+\begin{code}
 module Parser where
 
 import Language
@@ -135,3 +136,4 @@ parseProgram :: String -> Either ErrorString Program'
 parseProgram str = case parseProgram_ str of
                       Success a -> Right a
                       Failure ErrInfo{ _errDoc = e } -> Left (TrifectaPP.displayS (TrifectaPP.renderPretty 0.8 80 e) "")
+\end{code}

@@ -1,0 +1,667 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE TupleSections #-}</span>
+<span class="ot">{-# LANGUAGE RecordWildCards #-}</span>
+<span class="ot">{-# LANGUAGE ScopedTypeVariables #-}</span>
+<span class="kw">module</span> <span class="dt">TransformMem2Reg</span>(constructDominatorTree,
+    <span class="dt">CFG</span>(<span class="fu">..</span>),
+    mkBBGraph,
+    constructBBDominators,
+    getAllChildren,
+    getDominanceFrontier,
+    transformMem2Reg) <span class="kw">where</span>
+
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Data.Tree</span>
+<span class="kw">import </span><span class="dt">Data.List</span>(nub)
+<span class="kw">import qualified</span> <span class="dt">Data.Set</span> <span class="kw">as</span> <span class="dt">S</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Control.Monad.Reader</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Monoid</span> <span class="kw">as</span> <span class="dt">Monoid</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Set</span> <span class="kw">as</span> <span class="dt">S</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Debug.Trace</span>
+
+<span class="co">-- | Represents a graph with `a` as a vertex ID type</span>
+<span class="kw">newtype</span> <span class="dt">Graph</span> a <span class="fu">=</span> <span class="dt">Graph</span> {<span class="ot"> edges ::</span> [(a, a)] }
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">Graph</span> a) <span class="kw">where</span>
+  pretty graph <span class="fu">=</span>
+    vcat [pretty <span class="st">&quot;BB graph edges&quot;</span>,
+          (vcat <span class="fu">.</span> map (indent <span class="dv">4</span> <span class="fu">.</span> pretty) <span class="fu">.</span> edges <span class="fu">$</span> graph)]
+
+<span class="co">-- | The control flow graph, which is a graph of basic blocks</span>
+<span class="kw">type</span> <span class="dt">CFG</span> <span class="fu">=</span> <span class="dt">Graph</span> <span class="dt">BBId</span>
+
+<span class="co">-- | return predecessors of a node</span>
+<span class="ot">getPredecessors ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getPredecessors g bbid <span class="fu">=</span> [ src <span class="fu">|</span> (src, sink) <span class="ot">&lt;-</span> (edges g), sink <span class="fu">==</span> bbid]
+
+<span class="co">-- | Returns the children of an element in a dom tree</span>
+<span class="co">-- | This returns only the immediate children.</span>
+<span class="ot">getImmediateChildren ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getImmediateChildren (<span class="dt">Graph</span> edges) a <span class="fu">=</span> [dest <span class="fu">|</span> (src, dest) <span class="ot">&lt;-</span> edges, src<span class="fu">==</span>a]
+
+<span class="co">-- | Return all the vertices of the subgraph</span>
+<span class="ot">getAllChildren ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getAllChildren tree<span class="fu">@</span>(<span class="dt">Graph</span> edges) a <span class="fu">=</span>
+  a<span class="fu">:</span>(curChilds <span class="fu">&gt;&gt;=</span> (getAllChildren tree)) <span class="kw">where</span>
+  curChilds <span class="fu">=</span> getImmediateChildren tree a
+
+<span class="co">-- | Return the set of vertices in DomTree</span>
+<span class="ot">vertices ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a  <span class="ot">-&gt;</span> [a]
+vertices (<span class="dt">Graph</span> edges) <span class="fu">=</span> nub (map fst edges <span class="fu">++</span> map snd edges)
+
+<span class="co">-- | Get the successors of this basic block</span>
+<span class="ot">getBBSuccessors ::</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> [<span class="dt">BBId</span>]
+getBBSuccessors (<span class="dt">BasicBlock</span> { bbRetInst <span class="fu">=</span> <span class="dt">RetInstTerminal</span>}) <span class="fu">=</span> []
+getBBSuccessors (<span class="dt">BasicBlock</span> { bbRetInst <span class="fu">=</span> <span class="dt">RetInstRet</span> _}) <span class="fu">=</span> []
+getBBSuccessors (<span class="dt">BasicBlock</span> { bbRetInst <span class="fu">=</span> <span class="dt">RetInstBranch</span> next}) <span class="fu">=</span> [next]
+getBBSuccessors (<span class="dt">BasicBlock</span> { bbRetInst <span class="fu">=</span> <span class="dt">RetInstConditionalBranch</span> _ l r}) <span class="fu">=</span> [l, r]
+
+<span class="ot">mkBBGraph ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">CFG</span>
+mkBBGraph bbMap <span class="fu">=</span> <span class="dt">Graph</span> (M.foldMapWithKey makeEdges bbMap)  <span class="kw">where</span>
+
+    <span class="co">-- Make the edges corresponding to basic block.</span>
+<span class="ot">    makeEdges ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> [(<span class="dt">BBId</span>, <span class="dt">BBId</span>)]
+    makeEdges bbid bb <span class="fu">=</span> map (\succ <span class="ot">-&gt;</span> (bbid, succ)) (getBBSuccessors bb)
+
+<span class="co">-- a dominator tree is a tree of basic blocks</span>
+<span class="kw">newtype</span> <span class="dt">DominatorTree</span>  <span class="fu">=</span> <span class="dt">Tree</span> <span class="dt">BasicBlock</span>
+
+<span class="co">-- BBId of the root node.</span>
+<span class="kw">type</span> <span class="dt">EntryBBId</span> <span class="fu">=</span> <span class="dt">BBId</span>
+
+
+<span class="co">-- | Set of nodes that dominate a node.</span>
+<span class="kw">type</span> <span class="dt">DomSet</span> <span class="fu">=</span>  <span class="dt">S.Set</span> <span class="dt">BBId</span>
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">S.Set</span> a) <span class="kw">where</span>
+  pretty <span class="fu">=</span> pretty <span class="fu">.</span> S.toList
+
+<span class="co">-- | Map from a node to the set of nodes that dominate it</span>
+<span class="kw">type</span> <span class="dt">BBIdToDomSet</span> <span class="fu">=</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">DomSet</span>
+
+
+<span class="ot">initialBBIdToDomSet ::</span> <span class="dt">EntryBBId</span> <span class="ot">-&gt;</span>  <span class="co">-- ^entry BB ID</span>
+                  [<span class="dt">BBId</span>] <span class="ot">-&gt;</span>  <span class="co">-- ^All BB IDs</span>
+                  <span class="dt">BBIdToDomSet</span>
+initialBBIdToDomSet entryid ids <span class="fu">=</span> M.fromList (mapEntry<span class="fu">:</span>mapAllExceptEntry) <span class="kw">where</span>
+  <span class="co">-- entry block only dominantes itself</span>
+<span class="ot">  mapEntry ::</span> (<span class="dt">BBId</span>, <span class="dt">DomSet</span>)
+  mapEntry <span class="fu">=</span> (entryid, S.fromList [entryid])
+  <span class="co">-- IDs other than the entry block</span>
+<span class="ot">  nonEntryIds ::</span> [<span class="dt">BBId</span>]
+  nonEntryIds <span class="fu">=</span> filter (<span class="fu">/=</span> entryid) ids
+  <span class="co">-- list mapping basic block Ids to dominance sets</span>
+<span class="ot">  mapAllExceptEntry ::</span>  [(<span class="dt">BBId</span>, <span class="dt">DomSet</span>)]
+  mapAllExceptEntry <span class="fu">=</span>  zip nonEntryIds (repeat allDomSet)
+  <span class="co">-- all nodes in the dom set</span>
+<span class="ot">  allDomSet ::</span> <span class="dt">DomSet</span>
+  allDomSet <span class="fu">=</span> S.fromList ids
+
+
+
+<span class="co">-- Get the predecessors of &#39;BBId&#39; in &#39;Graph&#39;</span>
+
+<span class="ot">dominfoIterate ::</span> <span class="dt">EntryBBId</span> <span class="ot">-&gt;</span> <span class="co">-- ^Entry node ID</span>
+                 <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="co">-- ^Graph of BBs</span>
+                 <span class="dt">BBIdToDomSet</span> <span class="ot">-&gt;</span> <span class="co">-- ^Previous dom info</span>
+                 <span class="dt">BBIdToDomSet</span> <span class="co">-- ^ New dom info</span>
+dominfoIterate entryid cfg prevdominfo <span class="fu">=</span>  M.mapWithKey computeNewDom prevdominfo <span class="kw">where</span>
+  <span class="co">-- For the root node, DomSet_iplus1(root) = root</span>
+  <span class="co">-- For a non-root node, DomSet_iplus1(n) = intersect (forall p \in preds(n) DomSet_i(p)) U {n}</span>
+<span class="ot">  computeNewDom ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">DomSet</span> <span class="ot">-&gt;</span> <span class="dt">DomSet</span>
+  computeNewDom id old <span class="fu">=</span> <span class="kw">if</span> id <span class="fu">==</span> entryid <span class="kw">then</span> old <span class="kw">else</span> computeNewNonRootDom id
+  <span class="co">-- compute the dom set of a node that is not the root</span>
+<span class="ot">  computeNewNonRootDom ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">DomSet</span>
+  computeNewNonRootDom bbid <span class="fu">=</span> (combinePredDomSets ((getDoms <span class="fu">.</span> preds) bbid)) <span class="ot">`S.union`</span> (S.singleton bbid)
+
+  <span class="co">-- predecessors of id</span>
+<span class="ot">  preds ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> [<span class="dt">BBId</span>]
+  preds bbid <span class="fu">=</span> getPredecessors cfg bbid
+
+  <span class="co">-- combine all predecessor dom sets by intersecting them</span>
+<span class="ot">  combinePredDomSets ::</span> [<span class="dt">DomSet</span>] <span class="ot">-&gt;</span> <span class="dt">DomSet</span>
+  combinePredDomSets [] <span class="fu">=</span> error <span class="st">&quot;unreachable node in domset&quot;</span>
+  combinePredDomSets ds <span class="fu">=</span> foldl1 S.intersection ds
+
+  <span class="co">-- get dominators of ids</span>
+<span class="ot">  getDoms ::</span> [<span class="dt">BBId</span>] <span class="ot">-&gt;</span> [<span class="dt">DomSet</span>]
+  getDoms bbids <span class="fu">=</span> map (prevdominfo <span class="fu">M.!</span>) bbids
+
+<span class="ot">getFirstAdjacentEqual ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> [a] <span class="ot">-&gt;</span> a
+getFirstAdjacentEqual as <span class="fu">=</span> fst <span class="fu">.</span> head <span class="fu">$</span> dropWhile (\(a, a&#39;) <span class="ot">-&gt;</span> a <span class="fu">/=</span> a&#39;) (zip as (tail as))
+
+<span class="co">-- Map each basic block to the set of basic blocks that dominates it</span>
+<span class="ot">constructBBDominators ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">BBIdToDomSet</span>
+constructBBDominators program <span class="fu">=</span> getFirstAdjacentEqual iterations <span class="kw">where</span>
+    <span class="co">-- iterations of domInfoIterate applied</span>
+<span class="ot">    iterations ::</span> [<span class="dt">BBIdToDomSet</span>]
+    iterations <span class="fu">=</span> iterate (dominfoIterate entryid cfg) initdominfo
+
+    <span class="co">-- graph structure</span>
+<span class="ot">    cfg ::</span> <span class="dt">CFG</span>
+    cfg <span class="fu">=</span>  mkBBGraph (irProgramBBMap program)
+
+    <span class="co">-- seed constructBBDominators</span>
+<span class="ot">    initdominfo ::</span> <span class="dt">BBIdToDomSet</span>
+    initdominfo <span class="fu">=</span> initialBBIdToDomSet entryid bbids
+
+    <span class="co">-- ID of the root node</span>
+<span class="ot">    entryid ::</span> <span class="dt">BBId</span>
+    entryid <span class="fu">=</span> irProgramEntryBBId program
+
+    <span class="co">-- list of all basic block IDs</span>
+<span class="ot">    bbids ::</span> [<span class="dt">BBId</span>]
+    bbids <span class="fu">=</span> M.keys (irProgramBBMap program)
+
+
+<span class="kw">data</span> <span class="dt">DomTreeContext</span> <span class="fu">=</span> <span class="dt">DomTreeContext</span> {
+<span class="ot">  ctxBBIdToDomSet ::</span> <span class="dt">BBIdToDomSet</span>,
+<span class="ot">  ctxEntryId ::</span> <span class="dt">EntryBBId</span>
+}
+
+<span class="co">-- | Returns the dominators of BBId</span>
+<span class="ot">getBBDominators ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> <span class="dt">DomSet</span>
+getBBDominators bbid <span class="fu">=</span> <span class="kw">do</span>
+  bbIdToDomSet <span class="ot">&lt;-</span> reader ctxBBIdToDomSet
+  return <span class="fu">$</span> bbIdToDomSet <span class="fu">M.!</span> bbid
+
+<span class="co">-- | Returns the struct dominators of BBId</span>
+<span class="ot">getBBStrictDominators ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> <span class="dt">DomSet</span>
+getBBStrictDominators bbid <span class="fu">=</span> S.filter (<span class="fu">/=</span> bbid) <span class="fu">&lt;$&gt;</span> (getBBDominators bbid)
+
+
+<span class="co">-- | Returns whether y dominates x</span>
+<span class="ot">doesDominate ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> <span class="dt">Bool</span>
+doesDominate x y <span class="fu">=</span> <span class="kw">do</span>
+    bbIdToDomSet <span class="ot">&lt;-</span> reader ctxBBIdToDomSet
+    return <span class="fu">$</span> x <span class="ot">`S.member`</span> (bbIdToDomSet <span class="fu">M.!</span> y)
+
+<span class="co">-- | Run a forall in a traversable for a monadic context</span>
+<span class="ot">allTraversable ::</span> (<span class="dt">Foldable</span> t, <span class="dt">Traversable</span> t, <span class="dt">Monad</span> m) <span class="ot">=&gt;</span> t a <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> m <span class="dt">Bool</span>) <span class="ot">-&gt;</span> m <span class="dt">Bool</span>
+allTraversable ta mpred <span class="fu">=</span> (foldl (<span class="fu">&amp;&amp;</span>) <span class="dt">True</span>) <span class="fu">&lt;$&gt;</span> (forM ta mpred)
+
+<span class="co">-- | Return if the BBId is dominated by all bbs *other than itself* in others</span>
+<span class="ot">isDominatedByAllOthers ::</span> [<span class="dt">BBId</span>] <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> <span class="dt">Bool</span>
+isDominatedByAllOthers others self <span class="fu">=</span>
+  allTraversable others(\other <span class="ot">-&gt;</span> <span class="kw">if</span> other <span class="fu">==</span> self <span class="kw">then</span> return <span class="dt">True</span>
+                                                    <span class="kw">else</span> doesDominate other self)
+
+<span class="co">-- | Returns the immediate dominator if present, otherwise returns Nothing</span>
+<span class="ot">getImmediateDominator ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> (<span class="dt">Maybe</span> <span class="dt">BBId</span>)
+getImmediateDominator bbid <span class="fu">=</span> <span class="kw">do</span>
+    entryid <span class="ot">&lt;-</span> reader ctxEntryId
+    <span class="kw">if</span> entryid <span class="fu">==</span> bbid <span class="kw">then</span>
+      return <span class="dt">Nothing</span>
+    <span class="kw">else</span> <span class="kw">do</span>
+            strictDoms <span class="ot">&lt;-</span> S.toList <span class="fu">&lt;$&gt;</span> getBBStrictDominators bbid
+            idoms <span class="ot">&lt;-</span>  filterM (isDominatedByAllOthers strictDoms) strictDoms
+            <span class="kw">case</span> idoms <span class="kw">of</span>
+                    [idom] <span class="ot">-&gt;</span> return (<span class="dt">Just</span> idom)
+                    [] <span class="ot">-&gt;</span> return <span class="dt">Nothing</span>
+                    _ <span class="ot">-&gt;</span> error <span class="fu">$</span> <span class="st">&quot;*** found more than one idom:\n&quot;</span> <span class="fu">++</span> show (prettyableToString idoms)
+
+
+<span class="ot">foldMapM ::</span> (<span class="dt">Foldable</span> t, <span class="dt">Monad</span> m, <span class="dt">Monoid</span> r) <span class="ot">=&gt;</span> t a <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> m r) <span class="ot">-&gt;</span> m r
+foldMapM ta mfn <span class="fu">=</span> foldM (\monoid a <span class="ot">-&gt;</span> (monoid <span class="dt">Monoid</span><span class="fu">.&lt;&gt;</span>) <span class="fu">&lt;$&gt;</span> (mfn a)) mempty ta
+
+<span class="co">-- newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }</span>
+<span class="kw">type</span> <span class="dt">DomTree</span> <span class="fu">=</span> <span class="dt">Graph</span> <span class="dt">BBId</span>
+
+<span class="co">-- | internal reader that is not exported</span>
+<span class="ot">createDominatorTree_ ::</span> <span class="dt">Reader</span> <span class="dt">DomTreeContext</span> <span class="dt">DomTree</span>
+createDominatorTree_ <span class="fu">=</span> <span class="kw">do</span>
+  bbs <span class="ot">&lt;-</span> reader (M.keys <span class="fu">.</span> ctxBBIdToDomSet)
+  idoms <span class="ot">&lt;-</span> foldMapM bbs (\bb <span class="ot">-&gt;</span> <span class="kw">do</span>
+                              mIdom <span class="ot">&lt;-</span> getImmediateDominator bb
+                              <span class="kw">case</span> mIdom <span class="kw">of</span>
+                                <span class="dt">Just</span> idom <span class="ot">-&gt;</span> return [(idom, bb)]
+                                <span class="dt">Nothing</span> <span class="ot">-&gt;</span> return [])
+  return <span class="fu">$</span> <span class="dt">Graph</span> idoms
+
+
+
+
+<span class="co">-- | Construct the Dominator tree from the dominator sets and the entry BB</span>
+<span class="ot">constructDominatorTree ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">DomSet</span> <span class="ot">-&gt;</span> <span class="dt">EntryBBId</span> <span class="ot">-&gt;</span> <span class="dt">DomTree</span>
+constructDominatorTree bbidToDomSet entrybb  <span class="fu">=</span> runReader createDominatorTree_ (<span class="dt">DomTreeContext</span> bbidToDomSet entrybb)
+
+
+
+
+<span class="co">-- | The `dominates` relation. Given two BB Ids, returns whether `a` dominates `b`</span>
+<span class="ot">dominates ::</span> <span class="dt">DomTree</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+dominates tree a b <span class="fu">=</span> b <span class="ot">`elem`</span> (getAllChildren tree a)
+
+<span class="co">-- | Strictly dominates relation. `A` strictlyDom `B` iff `A` Dom `B` and `A` /= `B`</span>
+<span class="ot">strictlyDominates ::</span> <span class="dt">DomTree</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+strictlyDominates domtree a b <span class="fu">=</span> dominates domtree a b <span class="fu">&amp;&amp;</span> a <span class="fu">/=</span> b
+
+<span class="co">-- | Get the list of dominance frontiers of a given BB</span>
+<span class="co">-- | &quot;The dominance frontier of a node d is the set of all nodes n such that d</span>
+<span class="co">-- |  dominates an immediate predecessor of n, but d does not strictly dominate</span>
+<span class="co">-- |  n. It is the set of nodes where d&#39;s dominance stops.&quot;</span>
+<span class="co">-- | TODO: think anbout why *an immediate preceseeor*, not *all immediate ...*.</span>
+<span class="ot">getDominanceFrontier ::</span> <span class="dt">DomTree</span> <span class="ot">-&gt;</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> [<span class="dt">BBId</span>]
+getDominanceFrontier tree<span class="fu">@</span>(<span class="dt">Graph</span> domedges) cfg cur <span class="fu">=</span>
+  [bb <span class="fu">|</span> bb <span class="ot">&lt;-</span> vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] <span class="kw">where</span>
+  preds bb <span class="fu">=</span> (getPredecessors cfg bb)
+
+
+<span class="co">-- Get the names of all values allocated in a basic block</span>
+<span class="ot">getBBVarUses ::</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> [<span class="dt">Label</span> <span class="dt">Inst</span>]
+getBBVarUses (<span class="dt">BasicBlock</span>{bbInsts<span class="fu">=</span>bbInsts}) <span class="fu">=</span>
+  bbInsts <span class="fu">&gt;&gt;=</span> \(<span class="dt">Named</span> name inst) <span class="ot">-&gt;</span> <span class="kw">case</span> inst <span class="kw">of</span>
+                                        <span class="dt">InstAlloc</span> <span class="ot">-&gt;</span> [name]
+                                        <span class="dt">InstStore</span> (<span class="dt">ValueInstRef</span> slot) _ <span class="ot">-&gt;</span> [slot]
+                                        _ <span class="ot">-&gt;</span> []
+
+<span class="co">-- | Adjust possibly many keys</span>
+<span class="ot">adjustWithKeys ::</span> (<span class="dt">Ord</span> k, <span class="dt">Foldable</span> t) <span class="ot">=&gt;</span> (k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> t k <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> k a
+adjustWithKeys f ks m <span class="fu">=</span> foldl (\m k <span class="ot">-&gt;</span> M.adjustWithKey f k m) m ks
+
+
+<span class="ot">unsafeToNonEmpty ::</span> [a] <span class="ot">-&gt;</span> <span class="dt">NE.NonEmpty</span> a
+unsafeToNonEmpty [] <span class="fu">=</span> error <span class="st">&quot;unable to convert empty list to non empty&quot;</span>
+unsafeToNonEmpty (x<span class="fu">:</span>xs) <span class="fu">=</span> x <span class="fu">NE.:|</span> xs
+
+<span class="co">-- | For a given basic block, insert a phi node at the top</span>
+<span class="ot">insertPhiNodeCallback_ ::</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+insertPhiNodeCallback_ cfg lbl bbid bb<span class="fu">@</span>(<span class="dt">BasicBlock</span>{<span class="fu">..</span>}) <span class="fu">=</span>
+    bb {bbInsts<span class="fu">=</span>bbInsts&#39;} <span class="kw">where</span>
+<span class="ot">    bbInsts&#39; ::</span> [<span class="dt">Named</span> <span class="dt">Inst</span>]
+    bbInsts&#39; <span class="fu">=</span> (lbl <span class="fu">=:=</span> phi)<span class="fu">:</span>bbInsts
+
+<span class="ot">    phi ::</span> <span class="dt">Inst</span>
+    phi <span class="fu">=</span> <span class="dt">InstPhi</span> <span class="fu">.</span> unsafeToNonEmpty <span class="fu">$</span> (zip ((getPredecessors cfg bbid)) (repeat (<span class="dt">ValueInstRef</span> lbl)))
+
+
+<span class="co">-- | Place Phi nodes for a given instruction at a set of start CFGs. Initially, they should be the</span>
+<span class="co">-- |  set of nodes that store to the original value</span>
+<span class="ot">placePhiNodesForAlloc_ ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^Name of the original value</span>
+                          <span class="ot">-&gt;</span> <span class="dt">S.Set</span> <span class="dt">BBId</span> <span class="co">-- ^BBs to process</span>
+                          <span class="ot">-&gt;</span> <span class="dt">S.Set</span> <span class="dt">BBId</span> <span class="co">-- ^BBs that are already processed</span>
+                          <span class="ot">-&gt;</span> <span class="dt">CFG</span> <span class="co">-- ^The CFG of the function</span>
+                          <span class="ot">-&gt;</span> <span class="dt">DomTree</span> <span class="co">-- ^The dominator tree of the function</span>
+                          <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="co">-- ^Function body</span>
+                          <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap <span class="fu">=</span>
+    <span class="kw">if</span> null (curbbs)
+    <span class="kw">then</span> bbmap
+    <span class="kw">else</span> trace debugStr (placePhiNodesForAlloc_ name curbbs&#39; processed&#39; cfg domtree bbmap&#39;)  <span class="kw">where</span>
+<span class="ot">                cur ::</span> <span class="dt">BBId</span>
+                cur <span class="fu">=</span> S.elemAt <span class="dv">0</span> curbbs
+
+                <span class="co">-- | For every basic block in the dominance frontier, insert a phi node.</span>
+<span class="ot">                bbmap&#39; ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+                bbmap&#39; <span class="fu">=</span> adjustWithKeys (insertPhiNodeCallback_ cfg name) curfrontier bbmap
+
+<span class="ot">                curbbs&#39; ::</span> <span class="dt">S.Set</span> <span class="dt">BBId</span>
+                curbbs&#39; <span class="fu">=</span> (curbbs <span class="ot">`S.union`</span> curfrontier) <span class="dt">S</span><span class="fu">.</span>\\ processed&#39;
+
+<span class="ot">                curfrontier ::</span>  <span class="dt">S.Set</span> <span class="dt">BBId</span>
+                curfrontier <span class="fu">=</span> (S.fromList <span class="fu">$</span> getDominanceFrontier domtree cfg cur) <span class="dt">S</span><span class="fu">.</span>\\ processed&#39;
+
+<span class="ot">                processed&#39; ::</span> <span class="dt">S.Set</span> <span class="dt">BBId</span>
+                processed&#39; <span class="fu">=</span> (S.insert cur processed)
+
+<span class="ot">                debugStr ::</span> <span class="dt">String</span>
+                debugStr <span class="fu">=</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;running for: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;curbbs: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty curbbs <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;cur: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty cur <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;frontiner: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty curfrontier
+
+<span class="ot">mapReverse ::</span> (<span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a, <span class="dt">Ord</span> k, <span class="dt">Ord</span> a) <span class="ot">=&gt;</span> <span class="dt">M.OrderedMap</span> k [a] <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a [k]
+mapReverse m <span class="fu">=</span> M.fromListWith (<span class="fu">++</span>) [(a, [k]) <span class="fu">|</span> (k, as) <span class="ot">&lt;-</span> M.toList m, a <span class="ot">&lt;-</span> as]
+
+<span class="co">-- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf</span>
+<span class="ot">placePhiNodes_ ::</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">DomTree</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+placePhiNodes_ cfg domtree initbbmap <span class="fu">=</span>
+    M.foldlWithKey (\curbbmap name bbids <span class="ot">-&gt;</span> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap usesToBBIds  <span class="kw">where</span>
+<span class="ot">      bbIdToUses ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> [<span class="dt">Label</span> <span class="dt">Inst</span>]
+      bbIdToUses <span class="fu">=</span> fmap getBBVarUses initbbmap
+
+<span class="ot">      usesToBBIds ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) [<span class="dt">BBId</span>]
+      usesToBBIds <span class="fu">=</span> mapReverse bbIdToUses
+
+<span class="co">-- | Find wherever this variable is &quot;declared&quot;. An Alloca or a Phi node is considered a declare</span>
+<span class="ot">getVarDeclBBIds ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) [<span class="dt">BBId</span>]
+getVarDeclBBIds bbs <span class="fu">=</span> M.fromListWith (<span class="fu">++</span>) <span class="fu">$</span> <span class="kw">do</span>
+    (<span class="ot">k ::</span> <span class="dt">BBId</span> , bb) <span class="ot">&lt;-</span> M.toList bbs
+    inst <span class="ot">&lt;-</span> bbInsts bb
+    guard <span class="fu">$</span> isDeclInst_ inst
+
+    return (namedName inst, [k])
+    <span class="kw">where</span>
+<span class="ot">        isDeclInst_ ::</span> <span class="dt">Named</span> <span class="dt">Inst</span>  <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+        isDeclInst_ (<span class="dt">Named</span> instname inst) <span class="fu">=</span> <span class="kw">case</span> inst <span class="kw">of</span>
+                                                <span class="dt">InstAlloc</span> <span class="ot">-&gt;</span> <span class="dt">True</span>
+                                                <span class="dt">InstPhi</span> _ <span class="ot">-&gt;</span> <span class="dt">True</span>
+                                                _ <span class="ot">-&gt;</span> <span class="dt">False</span>
+<span class="co">-- | Rename all instructions in a basic block</span>
+<span class="ot">renameInstsInBB ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^Old label</span>
+                 <span class="ot">-&gt;</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^New label</span>
+                 <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="co">-- ^Basic Block to repalce in</span>
+                 <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+renameInstsInBB oldl newl (bb<span class="fu">@</span><span class="dt">BasicBlock</span>{bbInsts<span class="fu">=</span>bbInsts}) <span class="fu">=</span> bb {
+    bbInsts<span class="fu">=</span>map replaceLabel bbInsts
+} <span class="kw">where</span>
+    replaceLabel (<span class="dt">Named</span> lbl inst) <span class="fu">=</span> <span class="kw">let</span> lbl&#39; <span class="fu">=</span> <span class="kw">if</span> lbl <span class="fu">==</span> oldl <span class="kw">then</span> newl <span class="kw">else</span> lbl
+                                    <span class="kw">in</span> (<span class="dt">Named</span> lbl&#39;  (replaceInstRef_ inst))
+
+    <span class="co">-- | Replace references to label in Inst</span>
+<span class="ot">    replaceInstRef_ ::</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
+    replaceInstRef_ inst <span class="fu">=</span> mapInstValue replaceValueInstRef_ inst
+
+<span class="ot">    replaceValueInstRef_ ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span>
+    replaceValueInstRef_ (<span class="dt">ValueInstRef</span> lbl) <span class="fu">=</span>
+        <span class="kw">let</span> lbl&#39; <span class="fu">=</span> <span class="kw">if</span> lbl <span class="fu">==</span> oldl <span class="kw">then</span> newl <span class="kw">else</span> lbl <span class="kw">in</span> <span class="dt">ValueInstRef</span> lbl&#39;
+    replaceValueInstRef_ v <span class="fu">=</span> v
+
+<span class="co">-- | Rename all instructions in the dom-set of a basic block</span>
+<span class="ot">renameInstsInDomSet ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^Original label</span>
+                   <span class="ot">-&gt;</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^New label</span>
+                   <span class="ot">-&gt;</span> <span class="dt">BBIdToDomSet</span> <span class="co">-- ^Dominator sets</span>
+                   <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="co">-- ^ID to BB to start from</span>
+                   <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+                   <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+renameInstsInDomSet l l&#39; bbIdToDomSet bbid bbmap <span class="fu">=</span>
+    adjustWithKeys renamer domset bbmap <span class="kw">where</span>
+<span class="ot">        domset ::</span> <span class="dt">S.Set</span> <span class="dt">BBId</span>
+        domset <span class="fu">=</span> bbIdToDomSet <span class="fu">M.!</span> bbid
+
+<span class="ot">        renamer ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+        renamer _ bb <span class="fu">=</span> renameInstsInBB l l&#39; bb
+
+
+<span class="co">-- -- | Take a map and create a unique mapping from a key to each value.</span>
+<span class="co">-- -- | Hold the old key in the place where the new key maps to</span>
+<span class="co">-- -- | Take a map and create a unique mapping from a key to each value</span>
+<span class="co">-- uniquifyKeys :: Ord k =&gt; (Int -&gt; k -&gt; k) -&gt; M.OrderedMap k [a] -&gt; M.OrderedMap k (k, a)</span>
+<span class="co">-- uniquifyKeys uniqf m = M.fromList $ M.foldMapWithKey (uniqifyPerKey_ uniqf) m where</span>
+<span class="co">--     uniqifyPerKey_ :: (Int -&gt; k -&gt; k) -&gt; k -&gt; [a] -&gt; [(k, (k, a))]</span>
+<span class="co">--     uniqifyPerKey_ uniqf k as = foldMap (uniqifyPerKeyVal_ uniqf k) (zip [1..] as)</span>
+<span class="co">--</span>
+<span class="co">--     uniqifyPerKeyVal_ :: (Int -&gt; k -&gt; k) -&gt; k -&gt; (Int, a) -&gt; [(k, (k, a))]</span>
+<span class="co">--     uniqifyPerKeyVal_ uniqf k (i, a) =  [(uniqf i k, (k, a))]</span>
+
+
+<span class="kw">data</span> <span class="dt">VariableRenameContext</span> <span class="fu">=</span> <span class="dt">VariableRenameContext</span> {
+  <span class="co">-- | Map a name to the latest value that was stored in it.</span>
+  <span class="co">-- | This is used to collapse load / store in a BB.</span>
+<span class="ot">  ctxVarToLatestStoreVal ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="dt">Value</span>,
+  <span class="co">-- | Function</span>
+<span class="ot">  ctxBBMap ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">BBId</span>) <span class="dt">BasicBlock</span>
+}
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">VariableRenameContext</span> <span class="kw">where</span>
+    pretty (<span class="dt">VariableRenameContext</span>{<span class="fu">..</span>}) <span class="fu">=</span>
+        vcat [pretty <span class="st">&quot;vartoval:&quot;</span>, pretty ctxVarToLatestStoreVal]
+
+<span class="co">-- -- | Bump up the count of a variable.</span>
+<span class="co">-- bumpUpCount :: Label Inst -&gt; State VariableRenameContext ()</span>
+<span class="co">-- bumpUpCount name = do</span>
+<span class="co">--   varToCount &lt;- gets ctxVarToCount</span>
+<span class="co">--   -- If a value exists, bump it up. Otherwise set to 0</span>
+<span class="co">--   let count&#39; = M.insertWith (\new old -&gt; old + 1) name 0 varToCount</span>
+<span class="co">--   modify (\ctx -&gt; ctx {ctxVarToCount=count&#39;})</span>
+<span class="co">--</span>
+<span class="co">-- -- | Get the count of a variable.</span>
+<span class="co">-- getVarCount :: Label Inst -&gt; State VariableRenameContext Int</span>
+<span class="co">-- getVarCount name = do</span>
+<span class="co">--     modify (\ctx -&gt; ctx {ctxVarToCount = M.insertWith (\new old -&gt; old) name 0 (ctxVarToCount ctx)})</span>
+<span class="co">--     count &lt;- gets (\ctx -&gt; case M.lookup name (ctxVarToCount ctx) of</span>
+<span class="co">--                                 Just c -&gt; c</span>
+<span class="co">--                                 Nothing -&gt; error . docToString $ pretty &quot;getVarCount, unknown name:&quot; &lt;+&gt;  pretty name)</span>
+<span class="co">--     return count</span>
+
+<span class="co">-- getLatestName :: Label Inst -&gt; State VariableRenameContext (Label Inst)</span>
+<span class="co">-- getLatestName name = do</span>
+<span class="co">--     count &lt;- getVarCount name</span>
+<span class="co">--     return $ Label $ (unLabel name) ++ &quot;.renamed.&quot; ++ show count</span>
+<span class="co">--</span>
+
+<span class="co">-- | Function to rename value based on the current rename counts</span>
+<span class="co">-- | If there is a value remapping from a &quot;store&quot;, then use that</span>
+<span class="co">-- | If there is no remapping, then don&#39;t care</span>
+<span class="co">-- renameValue_ :: Value -&gt; State VariableRenameContext Value</span>
+<span class="co">-- renameValue_ v@(ValueConstInt _) = return v</span>
+<span class="co">-- renameValue_ (ValueInstRef name) = do</span>
+<span class="co">--     varToValue &lt;- gets ctxVarToLatestStoreVal</span>
+<span class="co">--     case M.lookup name varToValue of</span>
+<span class="co">--       Just val -&gt; return val</span>
+<span class="co">--       Nothing -&gt; ValueInstRef &lt;$&gt; getLatestName name</span>
+<span class="co">--</span>
+<span class="co">-- NOTE: this is a hack. The correct thing to do is to replace everything in the</span>
+<span class="co">-- BB that refers to this value.</span>
+<span class="ot">renameStoredValue_ ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> <span class="dt">Value</span>
+renameStoredValue_ v<span class="fu">@</span>(<span class="dt">ValueConstInt</span> _) <span class="fu">=</span> return v
+renameStoredValue_ orig<span class="fu">@</span>(<span class="dt">ValueInstRef</span> name) <span class="fu">=</span> <span class="kw">do</span>
+    varToValue <span class="ot">&lt;-</span> gets ctxVarToLatestStoreVal
+    <span class="kw">case</span> M.lookup name varToValue <span class="kw">of</span>
+      <span class="dt">Just</span> val <span class="ot">-&gt;</span> <span class="kw">do</span>
+                    <span class="kw">if</span> orig <span class="fu">==</span> val
+                    <span class="kw">then</span> return val
+                    <span class="kw">else</span> renameStoredValue_ val
+      <span class="dt">Nothing</span> <span class="ot">-&gt;</span> return orig
+
+<span class="ot">getLatestStoredValue_ ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> <span class="dt">Value</span>
+getLatestStoredValue_ lbl <span class="fu">=</span> gets (\ctx <span class="ot">-&gt;</span> (ctxVarToLatestStoreVal ctx) <span class="fu">M.!</span> lbl)
+
+<span class="co">-- | Rename bindings in the RHS of an instruction.</span>
+<span class="ot">variableRenameInstRHS ::</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> <span class="dt">Inst</span>
+variableRenameInstRHS inst <span class="fu">=</span> forInstValue renameStoredValue_  inst
+
+<span class="co">-- | Rename bindings in the LHS of an instruction</span>
+<span class="co">-- variableRenameInstLHS :: Named Inst -&gt; State VariableRenameContext (Named Inst)</span>
+<span class="co">-- variableRenameInstLHS namedInst@(Named name inst) = do</span>
+<span class="co">--    bumpUpCount name</span>
+<span class="co">--    curValToCount &lt;- gets ctxVarToCount</span>
+<span class="co">--    name&#39; &lt;- getLatestName name</span>
+<span class="co">--    return (Named name&#39; inst)</span>
+
+
+<span class="co">-- | Rename RHS &amp; LHS of an instruction correctly</span>
+<span class="co">-- | Can return [] for instructions to be omitted</span>
+<span class="ot">variableRenameInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> [<span class="dt">Named</span> <span class="dt">Inst</span>]
+variableRenameInst namedinst<span class="fu">@</span>(<span class="dt">Named</span> name inst) <span class="fu">=</span> <span class="kw">do</span>
+    <span class="kw">case</span> inst <span class="kw">of</span>
+        <span class="dt">InstStore</span> (<span class="dt">ValueInstRef</span> slot) val <span class="ot">-&gt;</span> <span class="kw">do</span>
+          valNamed <span class="ot">&lt;-</span> renameStoredValue_ val
+          modify (\ctx <span class="ot">-&gt;</span> ctx {ctxVarToLatestStoreVal<span class="fu">=</span>M.insert slot valNamed (ctxVarToLatestStoreVal ctx)})
+          return []
+
+        <span class="dt">InstLoad</span> (<span class="dt">ValueInstRef</span> slot) <span class="ot">-&gt;</span> <span class="kw">do</span>
+          loadedval <span class="ot">&lt;-</span> getLatestStoredValue_ slot
+          modify (\ctx <span class="ot">-&gt;</span> ctx {ctxVarToLatestStoreVal<span class="fu">=</span>M.insert name loadedval (ctxVarToLatestStoreVal ctx)})
+          return []
+
+        <span class="co">-- | For a phi node, all predecessors should map to phi node name.</span>
+        <span class="dt">InstPhi</span> namebbpairs <span class="ot">-&gt;</span> <span class="kw">do</span>
+            phi&#39; <span class="ot">&lt;-</span> forM namedinst variableRenameInstRHS
+            for namebbpairs (\(prevname, prevbbid) <span class="ot">-&gt;</span>
+                                modify (\ctx <span class="ot">-&gt;</span> (ctx {ctxVarToLatestStoreVal<span class="fu">=</span>M.insert name  (<span class="dt">ValueInstRef</span> name) (ctxVarToLatestStoreVal ctx)})))
+            return [phi&#39;]
+
+
+
+        <span class="co">-- | We don&#39;t need allocs, so delete them</span>
+        <span class="dt">InstAlloc</span> <span class="ot">-&gt;</span> return []
+
+        _ <span class="ot">-&gt;</span> <span class="kw">do</span>
+          <span class="co">-- | Rename RHS</span>
+          (<span class="ot">rhsrenamed ::</span> <span class="dt">Named</span> <span class="dt">Inst</span>) <span class="ot">&lt;-</span> forM namedinst variableRenameInstRHS
+          <span class="co">-- lhsrenamed &lt;- variableRenameInstLHS rhsrenamed</span>
+          return [rhsrenamed]
+
+
+
+<span class="co">-- | Rename the return instruction</span>
+<span class="ot">variableRenameRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> (<span class="dt">RetInst</span>)
+variableRenameRetInst ret <span class="fu">=</span> forRetInstValue renameStoredValue_ ret
+
+<span class="co">-- | Rename phi nodes in bb</span>
+<span class="ot">variableRenamePhiNodes ::</span> <span class="dt">BBId</span> <span class="co">-- ^Current BB Id</span>
+                          <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="co">-- ^Phi node BB Id</span>
+                          <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> ()
+variableRenamePhiNodes curbbid phibbid <span class="fu">=</span> <span class="kw">do</span>
+    varToValue <span class="ot">&lt;-</span> gets ctxVarToLatestStoreVal
+    phibb <span class="ot">&lt;-</span> gets (\ctx <span class="ot">-&gt;</span> (ctxBBMap ctx) <span class="fu">M.!</span> phibbid)
+    phiBBInsts&#39; <span class="ot">&lt;-</span> forM (bbInsts phibb) (\(<span class="dt">Named</span> name inst) <span class="ot">-&gt;</span> (<span class="dt">Named</span> name) <span class="fu">&lt;$&gt;</span> (phiRenamer curbbid inst))
+
+    <span class="kw">let</span> phibb&#39; <span class="fu">=</span> phibb {
+      bbInsts<span class="fu">=</span>phiBBInsts&#39;
+    }
+
+    modify (\ctx <span class="ot">-&gt;</span> ctx { ctxBBMap<span class="fu">=</span> M.insert phibbid phibb&#39; (ctxBBMap ctx) })
+    <span class="kw">where</span>
+    <span class="co">-- | Rename only phi ndoes leaving other instructions</span>
+<span class="ot">    phiRenamer ::</span> <span class="dt">BBId</span> <span class="co">-- ^ Current BB Id</span>
+                  <span class="ot">-&gt;</span> <span class="dt">Inst</span> <span class="co">-- ^Instruction from the child BB</span>
+                  <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> <span class="dt">Inst</span>
+    phiRenamer curbbid (<span class="dt">InstPhi</span> philist) <span class="fu">=</span> <span class="dt">InstPhi</span> <span class="fu">&lt;$&gt;</span> (renamePhiList curbbid philist)
+    phiRenamer _ (inst) <span class="fu">=</span> return inst
+
+    <span class="co">-- | Rename bindings in a phi node</span>
+<span class="ot">    renamePhiList ::</span> <span class="dt">BBId</span> <span class="co">-- ^ Current BB Id</span>
+                     <span class="ot">-&gt;</span> <span class="dt">NE.NonEmpty</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>) <span class="co">-- ^Phi node parameters</span>
+                     <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> (<span class="dt">NE.NonEmpty</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>))
+    renamePhiList curbbid philist <span class="fu">=</span>
+      forM philist (renamePhiBinding curbbid)
+    <span class="co">-- | Rename a single binding in the phi node entry list</span>
+<span class="ot">    renamePhiBinding ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>)
+    renamePhiBinding curbbid (bbid, value) <span class="fu">=</span> (bbid,)  <span class="fu">&lt;$&gt;</span> stateValue&#39;
+        <span class="kw">where</span> stateValue&#39; <span class="fu">=</span> <span class="kw">if</span> bbid <span class="fu">==</span> curbbid
+                        <span class="kw">then</span> renameStoredValue_ value
+                        <span class="kw">else</span> return value
+
+
+<span class="ot">resetVarMappings ::</span> <span class="dt">VariableRenameContext</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> ()
+resetVarMappings parentctx <span class="fu">=</span> modify (\ctx <span class="ot">-&gt;</span> ctx { ctxVarToLatestStoreVal<span class="fu">=</span>ctxVarToLatestStoreVal parentctx })
+
+<span class="co">-- | Rename all instructions and the return instructoin at a given BB</span>
+<span class="ot">instructionsRenameAtBB ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> ()
+instructionsRenameAtBB curbbid <span class="fu">=</span> <span class="kw">do</span>
+  bbmap <span class="ot">&lt;-</span> gets ctxBBMap
+  modify (\ctx <span class="ot">-&gt;</span> ctx { ctxBBMap<span class="fu">=</span> (ctxBBMap ctx) })
+  <span class="kw">let</span> curbb <span class="fu">=</span> bbmap <span class="fu">M.!</span> curbbid
+  bbInsts&#39; <span class="ot">&lt;-</span> mconcat <span class="fu">&lt;$&gt;</span> for (bbInsts curbb) variableRenameInst
+
+  bbRetInst&#39; <span class="ot">&lt;-</span> variableRenameRetInst (bbRetInst curbb)
+
+  <span class="kw">let</span> curbb&#39; <span class="fu">=</span> curbb { bbInsts <span class="fu">=</span> bbInsts&#39;, bbRetInst <span class="fu">=</span> bbRetInst&#39; }
+  <span class="kw">let</span> bbmap&#39; <span class="fu">=</span> M.insert curbbid curbb&#39; bbmap
+
+  modify (\ctx <span class="ot">-&gt;</span> ctx { ctxBBMap<span class="fu">=</span>bbmap&#39; })
+
+
+<span class="co">-- 1. rename instructions</span>
+<span class="co">-- 2. rename phi nodes of children in CFG</span>
+<span class="co">-- 3. follow process into children of dominator tree</span>
+<span class="co">-- TODO: fold current BBId into the state or something, this is a HUGE mess.</span>
+<span class="co">-- | Like seriously, I hate myself a little for *writing* this bastard.</span>
+<span class="ot">variableRenameAtBB ::</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">DomTree</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">VariableRenameContext</span> ()
+variableRenameAtBB cfg domtree curbbid <span class="fu">=</span> <span class="kw">do</span>
+  parentctx <span class="ot">&lt;-</span> get
+  <span class="co">-- | Rename all instructions at BB</span>
+  instructionsRenameAtBB curbbid
+
+  <span class="co">-- | Rename Phi nodes of children in CFG</span>
+  <span class="kw">let</span> cfgChildrenIDs <span class="fu">=</span> getImmediateChildren cfg curbbid
+  forM_ cfgChildrenIDs (variableRenamePhiNodes curbbid)
+
+
+  <span class="kw">let</span> domTreeChildrenIDs <span class="fu">=</span> getImmediateChildren domtree curbbid
+  forM_ domTreeChildrenIDs (\childid <span class="ot">-&gt;</span> <span class="kw">do</span>
+                                  variableRenameAtBB cfg domtree childid)
+  resetVarMappings parentctx
+  return ()
+
+
+
+
+<span class="co">-- | Rename variables to be unique in the function.</span>
+<span class="ot">lowerMemToReg ::</span> <span class="dt">CFG</span>  <span class="co">-- ^ The CFG for the program.</span>
+                   <span class="ot">-&gt;</span> <span class="dt">DomTree</span> <span class="co">-- ^Dominator tree for the program.</span>
+                   <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="co">-- ^Entry BBId</span>
+                   <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="co">-- ^Function</span>
+                   <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+lowerMemToReg cfg domtree entrybbid bbmap <span class="fu">=</span>
+    ctxBBMap <span class="fu">$</span> execState (variableRenameAtBB cfg domtree entrybbid) initctx <span class="kw">where</span>
+<span class="ot">      initctx ::</span> <span class="dt">VariableRenameContext</span>
+      initctx <span class="fu">=</span> <span class="dt">VariableRenameContext</span> { ctxBBMap<span class="fu">=</span>bbmap,
+                                        ctxVarToLatestStoreVal<span class="fu">=</span>mempty
+                                      }
+
+<span class="ot">renumber ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+renumber entryBBId prog <span class="fu">=</span> prog
+
+<span class="ot">transformMem2Reg ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+transformMem2Reg program<span class="fu">@</span><span class="dt">IRProgram</span>{irProgramBBMap<span class="fu">=</span>bbmap,
+                           irProgramEntryBBId<span class="fu">=</span>entrybbid} <span class="fu">=</span>
+    (<span class="dt">IRProgram</span> {irProgramBBMap<span class="fu">=</span>bbmapReg, irProgramEntryBBId<span class="fu">=</span>entrybbid}) <span class="kw">where</span>
+<span class="ot">      cfg ::</span> <span class="dt">CFG</span>
+      cfg <span class="fu">=</span>  mkBBGraph bbmap
+
+<span class="ot">      bbIdToDomSet ::</span> <span class="dt">BBIdToDomSet</span>
+      bbIdToDomSet <span class="fu">=</span> constructBBDominators program
+
+<span class="ot">      domtree ::</span> <span class="dt">DomTree</span>
+      domtree <span class="fu">=</span> constructDominatorTree bbIdToDomSet entrybbid
+
+<span class="ot">      bbmapWithPhi ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>
+      bbmapWithPhi <span class="fu">=</span> (placePhiNodes_ cfg domtree) <span class="fu">$</span> bbmap
+
+      bbmapReg <span class="fu">=</span> (lowerMemToReg cfg domtree entrybbid) bbmapWithPhi
+
+      bbmapNumbered <span class="fu">=</span> renumber entrybbid bbmapReg</code></pre></div>
+</body>
+</html>

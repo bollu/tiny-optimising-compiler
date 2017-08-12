@@ -1,3 +1,4 @@
+\begin{code}
 module ProgramToIR where
 import Language
 import IR
@@ -247,3 +248,4 @@ programToIR (Program stmts) =
 
 
 type DominatorTree = T.Tree BBId
+\end{code}

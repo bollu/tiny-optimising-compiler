@@ -1,3 +1,4 @@
+\begin{code}
 module Main where
 import Parser
 import qualified IR as IR
@@ -58,4 +59,4 @@ main = do
 
             putStrLn "*** MIPS assembly *** "
             putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  mem2regprog
-
+\end{code}

@@ -1,0 +1,105 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">Language</span> <span class="kw">where</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+
+<span class="kw">newtype</span> <span class="dt">Literal</span> <span class="fu">=</span> <span class="dt">Literal</span> {<span class="ot"> unLiteral ::</span> <span class="dt">String</span> } <span class="kw">deriving</span>(<span class="dt">Ord</span>, <span class="dt">Eq</span>)
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">Literal</span> <span class="kw">where</span>
+  pretty <span class="fu">=</span> pretty <span class="fu">.</span> unLiteral
+
+<span class="kw">data</span> <span class="dt">BinOp</span> <span class="fu">=</span> <span class="dt">Plus</span> <span class="fu">|</span> <span class="dt">Multiply</span> <span class="fu">|</span> <span class="dt">L</span> <span class="fu">|</span> <span class="dt">And</span>
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">BinOp</span> <span class="kw">where</span>
+  pretty <span class="dt">Plus</span> <span class="fu">=</span> pretty <span class="st">&quot;+&quot;</span>
+  pretty <span class="dt">Multiply</span> <span class="fu">=</span> pretty <span class="st">&quot;*&quot;</span>
+  pretty <span class="dt">L</span> <span class="fu">=</span> pretty <span class="st">&quot;&lt;&quot;</span>
+  pretty <span class="dt">And</span> <span class="fu">=</span> pretty <span class="st">&quot;&amp;&amp;&quot;</span>
+
+<span class="kw">data</span> <span class="dt">Expr</span> a <span class="fu">=</span> <span class="dt">EBinOp</span> a (<span class="dt">Expr</span> a) <span class="dt">BinOp</span> (<span class="dt">Expr</span> a) <span class="fu">|</span>
+                  <span class="dt">EInt</span> a <span class="dt">Int</span> <span class="fu">|</span>
+                  <span class="dt">ELiteral</span> a <span class="dt">Literal</span>
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> (<span class="dt">Expr</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">EBinOp</span> _ l op r) <span class="fu">=</span> pretty <span class="st">&quot;(&quot;</span> <span class="fu">&lt;+&gt;</span> pretty op <span class="fu">&lt;+&gt;</span>
+                             pretty l <span class="fu">&lt;+&gt;</span> pretty r <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;)&quot;</span>
+  pretty (<span class="dt">EInt</span> _ i) <span class="fu">=</span> pretty i
+  pretty (<span class="dt">ELiteral</span> _ lit) <span class="fu">=</span> pretty lit
+
+<span class="kw">type</span> <span class="dt">Expr&#39;</span> <span class="fu">=</span> <span class="dt">Expr</span> ()
+
+<span class="kw">type</span> <span class="dt">Block</span> a <span class="fu">=</span> [<span class="dt">Stmt</span> a]
+<span class="kw">data</span> <span class="dt">Stmt</span> a <span class="fu">=</span> <span class="dt">If</span> a (<span class="dt">Expr</span> a) (<span class="dt">Block</span> a) (<span class="dt">Block</span> a) <span class="fu">|</span>
+              <span class="dt">While</span> a (<span class="dt">Expr</span> a) (<span class="dt">Block</span> a) <span class="fu">|</span>
+              <span class="dt">Assign</span> a <span class="dt">Literal</span> (<span class="dt">Expr</span> a) <span class="fu">|</span>
+              <span class="dt">Define</span> a <span class="dt">Literal</span> <span class="fu">|</span>
+              <span class="dt">Return</span> a (<span class="dt">Expr</span> a)
+
+
+<span class="ot">nestDepth ::</span> <span class="dt">Int</span>
+nestDepth <span class="fu">=</span> <span class="dv">4</span>
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> (<span class="dt">Stmt</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">If</span> _ cond then&#39; else&#39;) <span class="fu">=</span> pretty <span class="st">&quot;if&quot;</span> <span class="fu">&lt;+&gt;</span> pretty cond <span class="fu">&lt;+&gt;</span>
+                                  PP.braces (nest <span class="dv">4</span> (pretty then&#39;)) <span class="fu">&lt;+&gt;</span>
+                                  PP.braces (nest <span class="dv">4</span> (pretty else&#39;))
+
+  pretty (<span class="dt">While</span> _ cond body) <span class="fu">=</span> pretty <span class="st">&quot;while&quot;</span> <span class="fu">&lt;+&gt;</span> pretty cond <span class="fu">&lt;+&gt;</span> PP.braces (nest <span class="dv">4</span> (pretty body))
+  pretty (<span class="dt">Assign</span> _ lhs rhs) <span class="fu">=</span> pretty <span class="st">&quot;assign&quot;</span> <span class="fu">&lt;+&gt;</span> pretty lhs <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:=&quot;</span> <span class="fu">&lt;+&gt;</span> pretty rhs
+  pretty (<span class="dt">Define</span> _ lit) <span class="fu">=</span> pretty <span class="st">&quot;define&quot;</span> <span class="fu">&lt;+&gt;</span> pretty lit
+  pretty (<span class="dt">Return</span> _ expr) <span class="fu">=</span> pretty <span class="st">&quot;return&quot;</span> <span class="fu">&lt;+&gt;</span> pretty expr
+
+<span class="kw">type</span> <span class="dt">Stmt&#39;</span> <span class="fu">=</span> <span class="dt">Stmt</span> ()
+
+
+<span class="kw">newtype</span> <span class="dt">Program</span> a <span class="fu">=</span> <span class="dt">Program</span> [<span class="dt">Stmt</span> a]
+<span class="kw">type</span> <span class="dt">Program&#39;</span> <span class="fu">=</span> <span class="dt">Program</span> ()
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> (<span class="dt">Program</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">Program</span> stmts) <span class="fu">=</span> vcat (map pretty stmts)</code></pre></div>
+</body>
+</html>

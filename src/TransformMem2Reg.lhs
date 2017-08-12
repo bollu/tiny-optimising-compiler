@@ -1,3 +1,4 @@
+\begin{code}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -615,3 +616,4 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
       bbmapReg = (lowerMemToReg cfg domtree entrybbid) bbmapWithPhi
 
       bbmapNumbered = renumber entrybbid bbmapReg
+\end{code}

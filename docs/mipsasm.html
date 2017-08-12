@@ -1,0 +1,205 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE DeriveAnyClass #-}</span>
+<span class="kw">module</span> <span class="dt">MIPSAsm</span>(generateASM, <span class="dt">ASMDoc</span>(<span class="fu">..</span>)) <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+
+<span class="co">-- This module assumes that constants in all parameters are canonicalized</span>
+<span class="co">-- to be the second parameter.</span>
+
+<span class="co">-- | Parameter to MIPS Instructions</span>
+<span class="kw">type</span> <span class="dt">MIPSParam</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
+
+<span class="co">-- | Instruction Name</span>
+<span class="kw">type</span> <span class="dt">MIPSInstName</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
+
+<span class="co">-- | a Mips instruction</span>
+<span class="kw">type</span> <span class="dt">MIPSInst</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
+
+<span class="co">-- | a mips register name</span>
+<span class="kw">type</span> <span class="dt">MIPSRegName</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
+
+<span class="co">-- | a mips label</span>
+<span class="kw">type</span> <span class="dt">MIPSLabel</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
+
+<span class="kw">data</span> <span class="dt">ASMContext</span> <span class="fu">=</span> <span class="dt">ASMContext</span> {
+<span class="ot">    instToReg ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="dt">MIPSParam</span>,
+<span class="ot">    insts ::</span> [<span class="dt">MIPSInst</span>],
+<span class="ot">    irprogram ::</span> <span class="dt">IRProgram</span>
+}
+
+<span class="ot">initASMContext ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">ASMContext</span>
+initASMContext program <span class="fu">=</span> <span class="dt">ASMContext</span> {
+  instToReg<span class="fu">=</span>mempty,
+  insts<span class="fu">=</span>mempty,
+  irprogram<span class="fu">=</span>program
+}
+
+
+
+<span class="kw">newtype</span> <span class="dt">ASMDoc</span> <span class="fu">=</span> <span class="dt">ASMDoc</span> {<span class="ot"> unASMDoc ::</span> <span class="dt">Doc</span> () }
+
+<span class="co">-- | The zero register</span>
+<span class="ot">zeroReg ::</span> <span class="dt">MIPSRegName</span>
+zeroReg <span class="fu">=</span> pretty <span class="st">&quot;$zero&quot;</span>
+
+<span class="co">-- | Compile an instruction that sets a particular register value</span>
+<span class="ot">compileSetRegisterValue ::</span> <span class="dt">MIPSRegName</span>  <span class="ot">-&gt;</span> <span class="dt">MIPSParam</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+compileSetRegisterValue regname param <span class="fu">=</span>
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;ori&quot;</span> <span class="fu">&lt;+&gt;</span> regname <span class="fu">&lt;+&gt;</span> zeroReg <span class="fu">&lt;+&gt;</span> param
+
+
+
+<span class="co">-- | append a MIPSInst to the ASMContext</span>
+<span class="ot">appendMIPSInst ::</span> <span class="dt">MIPSInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+appendMIPSInst mi <span class="fu">=</span> modify (\ctx <span class="ot">-&gt;</span> ctx {insts<span class="fu">=</span>(insts ctx) <span class="fu">++</span> [mi]})
+
+<span class="co">-- | Compile binary operator</span>
+<span class="ot">compileBinaryOp ::</span> <span class="dt">MIPSInstName</span> <span class="ot">-&gt;</span>  <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+compileBinaryOp name v1 v2 <span class="fu">=</span> <span class="kw">do</span>
+    p1 <span class="ot">&lt;-</span> compileValue v1
+    p2 <span class="ot">&lt;-</span> compileValue v2
+    appendMIPSInst <span class="fu">$</span> name <span class="fu">&lt;+&gt;</span> p1 <span class="fu">&lt;+&gt;</span> p2
+
+<span class="co">-- | Compile Instruction.</span>
+<span class="ot">appendInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span><span class="dt">InstAlloc</span>} <span class="fu">=</span> error <span class="st">&quot;alloc should not be present in SSA&quot;</span>
+appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span>inst<span class="fu">@</span>(<span class="dt">InstStore</span> _ _)} <span class="fu">=</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
+    pretty inst <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;should not be present in SSA&quot;</span>
+appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span>inst<span class="fu">@</span>(<span class="dt">InstLoad</span> _)} <span class="fu">=</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
+    pretty inst <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;should not be present in SSA&quot;</span>
+
+<span class="co">-- | compile a ret inst</span>
+<span class="ot">appendRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+appendRetInst (<span class="dt">RetInstRet</span> val) <span class="fu">=</span> <span class="kw">do</span>
+    param <span class="ot">&lt;-</span> compileValue val
+    <span class="co">-- | 1 is the ID of print_int</span>
+    compileSetRegisterValue (pretty <span class="st">&quot;$v0&quot;</span>) (pretty (<span class="dv">1</span><span class="ot"> ::</span> <span class="dt">Int</span>))
+    compileSetRegisterValue (pretty <span class="st">&quot;$a0&quot;</span>) param
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;syscall&quot;</span>
+
+    <span class="co">-- | 10 is the ID of terminate</span>
+    compileSetRegisterValue (pretty <span class="st">&quot;$v0&quot;</span>) (pretty (<span class="dv">10</span><span class="ot"> ::</span> <span class="dt">Int</span>))
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;syscall&quot;</span>
+
+appendRetInst (<span class="dt">RetInstBranch</span> lbl) <span class="fu">=</span> <span class="kw">do</span>
+    mipslabel <span class="ot">&lt;-</span> compileBBLabel lbl
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;j&quot;</span> <span class="fu">&lt;+&gt;</span> mipslabel
+
+
+appendRetInst (<span class="dt">RetInstConditionalBranch</span> cond tlabel flabel) <span class="fu">=</span> <span class="kw">do</span>
+    tmipslabel <span class="ot">&lt;-</span> compileBBLabel tlabel
+    fmipslabel <span class="ot">&lt;-</span> compileBBLabel flabel
+    condparam <span class="ot">&lt;-</span> compileValue cond
+    <span class="co">-- | if cond != 0, goto true</span>
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;bne&quot;</span> <span class="fu">&lt;+&gt;</span> condparam <span class="fu">&lt;+&gt;</span> zeroReg <span class="fu">&lt;+&gt;</span> tmipslabel
+    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;j&quot;</span> <span class="fu">&lt;+&gt;</span> fmipslabel
+
+<span class="co">-- | Construct a `Param` from `Value</span>
+<span class="ot">compileValueRaw_ ::</span> <span class="dt">ASMContext</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">MIPSParam</span>
+compileValueRaw_ _(<span class="dt">ValueConstInt</span> i) <span class="fu">=</span> pretty i
+compileValueRaw_ ctx (<span class="dt">ValueInstRef</span> name) <span class="fu">=</span>
+    <span class="kw">case</span> M.lookup name  (instToReg ctx) <span class="kw">of</span>
+        <span class="dt">Just</span> param <span class="ot">-&gt;</span> param
+        <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;not in instToReg&quot;</span>
+
+<span class="co">-- | State version of `compileValueRaw_`</span>
+<span class="ot">compileValue ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> <span class="dt">MIPSParam</span>
+compileValue value <span class="fu">=</span> gets (\ctx <span class="ot">-&gt;</span> compileValueRaw_ ctx value)
+
+<span class="ot">entryBBLabel ::</span> <span class="dt">State</span> <span class="dt">ASMContext</span> (<span class="dt">Label</span> <span class="dt">BasicBlock</span>)
+entryBBLabel <span class="fu">=</span>
+    gets (\ctx <span class="ot">-&gt;</span> <span class="kw">let</span>
+<span class="ot">                    program ::</span> <span class="dt">IRProgram</span>
+                    program <span class="fu">=</span> irprogram ctx
+
+<span class="ot">                    entrybbid ::</span> <span class="dt">BBId</span>
+                    entrybbid <span class="fu">=</span> irProgramEntryBBId program
+
+<span class="ot">                    entrybb ::</span> <span class="dt">BasicBlock</span>
+                    entrybb <span class="fu">=</span> (irProgramBBMap program) <span class="fu">M.!</span> entrybbid
+                  <span class="kw">in</span> bbLabel entrybb)
+
+<span class="co">-- | convert a BB label to a MIPSLabel</span>
+<span class="ot">compileBBLabel ::</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> (<span class="dt">MIPSLabel</span>)
+compileBBLabel label <span class="fu">=</span> <span class="kw">do</span>
+    entrylabel <span class="ot">&lt;-</span> entryBBLabel
+    <span class="co">-- | Rename entry label to `main`</span>
+    <span class="kw">let</span> label&#39; <span class="fu">=</span> <span class="kw">if</span> entrylabel <span class="fu">==</span> label <span class="kw">then</span> (<span class="dt">Label</span> <span class="st">&quot;main&quot;</span>) <span class="kw">else</span> label
+    return <span class="fu">.</span> pretty <span class="fu">.</span> unLabel <span class="fu">$</span> label&#39;
+
+<span class="co">-- | Append a basic block label into the assembly.</span>
+<span class="ot">appendBBLabel ::</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+appendBBLabel lbl <span class="fu">=</span> <span class="kw">do</span>
+    mipslbl <span class="ot">&lt;-</span> compileBBLabel lbl
+    appendMIPSInst <span class="fu">$</span> mipslbl <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:&quot;</span>
+
+<span class="co">-- | Compile a Basic Block</span>
+<span class="ot">compileBB ::</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
+compileBB bb <span class="fu">=</span> <span class="kw">do</span>
+    appendBBLabel (bbLabel bb)
+    for (bbInsts bb) appendInst
+    appendRetInst (bbRetInst bb)
+
+<span class="co">-- | Generate ASM</span>
+<span class="ot">generateASM ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">ASMDoc</span>
+generateASM program <span class="fu">=</span>
+  <span class="dt">ASMDoc</span> <span class="fu">$</span> vcat <span class="fu">$</span> insts <span class="fu">$</span> execState (<span class="kw">do</span>
+    <span class="co">-- | Compile all basic blocks</span>
+    for (M.elems (irProgramBBMap program)) compileBB) (initASMContext program)</code></pre></div>
+</body>
+</html>

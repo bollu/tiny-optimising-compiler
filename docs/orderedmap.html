@@ -1,0 +1,181 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE DeriveFunctor #-}</span>
+<span class="ot">{-# LANGUAGE DeriveFoldable #-}</span>
+<span class="ot">{-# LANGUAGE DeriveTraversable #-}</span>
+<span class="ot">{-# LANGUAGE InstanceSigs #-}</span>
+<span class="ot">{-# LANGUAGE RecordWildCards #-}</span>
+<span class="kw">module</span> <span class="dt">OrderedMap</span>(<span class="dt">OrderedMap</span>,
+  fromList,
+  size,
+  adjust,
+  adjustWithKey,
+  insert,
+  insertWith,
+  elems,
+  toList,
+  keys,
+  (<span class="fu">!</span>),
+  union,
+  fromListWith,
+  foldMapWithKey,
+  foldlWithKey,
+  mapWithKey,
+  OrderedMap.lookup,
+  delete) <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Map.Strict</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Data.Monoid</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List</span> <span class="kw">as</span> <span class="dt">L</span>
+
+<span class="co">-- At some point, I need this. This is more convenient than overloading the key to store the insertion time.</span>
+<span class="co">-- | A dictionary that orders elements by insertion time</span>
+<span class="kw">data</span> <span class="dt">OrderedMap</span> k v <span class="fu">=</span> <span class="dt">OrderedMap</span> {<span class="ot"> map&#39; ::</span> <span class="dt">M.Map</span> k v,<span class="ot"> order ::</span> [k] } <span class="kw">deriving</span>(<span class="dt">Show</span>, <span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>, <span class="dt">Eq</span>)
+
+<span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">OrderedMap</span> k v) <span class="kw">where</span>
+  pretty (<span class="dt">OrderedMap</span> _ []) <span class="fu">=</span> pretty <span class="st">&quot;empty map&quot;</span>
+  pretty ok <span class="fu">=</span> indent <span class="dv">2</span> (vcat (map pkv (toList ok))) <span class="kw">where</span>
+<span class="ot">    pkv ::</span> (<span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> (k, v) <span class="ot">-&gt;</span> <span class="dt">Doc</span> ann
+    pkv (k, v) <span class="fu">=</span>  pretty k <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot; =&gt; &quot;</span> <span class="fu">&lt;+&gt;</span> pretty v
+
+<span class="kw">instance</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> <span class="dt">Monoid</span> (<span class="dt">OrderedMap</span> k v) <span class="kw">where</span>
+<span class="ot">  mempty ::</span> <span class="dt">OrderedMap</span> k v
+  mempty <span class="fu">=</span> <span class="dt">OrderedMap</span> mempty mempty
+
+<span class="ot">  mappend ::</span> <span class="dt">OrderedMap</span> k v <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k v <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k v
+  mappend (<span class="dt">OrderedMap</span> m o) (<span class="dt">OrderedMap</span> m&#39; o&#39;) <span class="fu">=</span> <span class="dt">OrderedMap</span> (m <span class="ot">`mappend`</span> m&#39;) (o <span class="ot">`mappend`</span> o&#39;)
+
+<span class="ot">liftMapEdit_ ::</span> (<span class="dt">M.Map</span> k v <span class="ot">-&gt;</span> <span class="dt">M.Map</span> k v&#39;) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k v <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k v&#39;
+liftMapEdit_ f (<span class="dt">OrderedMap</span> map&#39; order) <span class="fu">=</span> <span class="dt">OrderedMap</span> (f map&#39;) order
+
+<span class="ot">liftMapExtract_ ::</span> (<span class="dt">M.Map</span> k v <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k v <span class="ot">-&gt;</span> a
+liftMapExtract_ f (<span class="dt">OrderedMap</span> map&#39; _) <span class="fu">=</span> f map&#39;
+
+<span class="co">-- | NOTE: this will maintain the order of insertion. Elements that are inserted</span>
+<span class="co">-- | later are returned later in the `keys`, `elems`.</span>
+<span class="ot">insert  ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+insert k a om<span class="fu">@</span><span class="dt">OrderedMap</span>{<span class="fu">..</span>} <span class="fu">=</span> <span class="kw">case</span> (liftMapExtract_ (M.lookup k)) om <span class="kw">of</span>
+            <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> (M.insert k a map&#39;) (order <span class="fu">++</span> [k])
+            <span class="co">-- If the key already exists, keep the old order</span>
+            _ <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> (M.insert k a map&#39;) (order)
+
+<span class="co">-- | NOTE: this will maintain the order of insertion. Elements that are inserted</span>
+<span class="co">-- | later are returned later in the `keys`, `elems`.</span>
+<span class="ot">insertWith ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+insertWith combiner k a om<span class="fu">@</span><span class="dt">OrderedMap</span>{<span class="fu">..</span>} <span class="fu">=</span>
+  <span class="kw">case</span> (liftMapExtract_ (M.lookup k)) om <span class="kw">of</span>
+    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> (M.insertWith combiner k a map&#39;) (order <span class="fu">++</span> [k])
+    <span class="co">-- If the key already exists, keep the old order</span>
+    _ <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> (M.insertWith combiner k a map&#39;) (order)
+
+lookup<span class="ot"> ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">Maybe</span> a
+lookup k <span class="fu">=</span> liftMapExtract_ (M.lookup k)
+
+<span class="ot">fromList ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> [(k, a)] <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+fromList kv <span class="fu">=</span> <span class="dt">OrderedMap</span> (M.fromList kv)  (map fst kv)
+
+<span class="ot">size ::</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">Int</span>
+size <span class="fu">=</span> liftMapExtract_ M.size
+
+<span class="ot">keys ::</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [k]
+keys  <span class="fu">=</span> order
+
+<span class="ot">index_ ::</span> (<span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a, <span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> a
+index_ omap k <span class="fu">=</span> <span class="kw">case</span> OrderedMap.lookup k omap <span class="kw">of</span>
+            <span class="dt">Just</span> a <span class="ot">-&gt;</span> a
+            <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
+                         vcat [pretty <span class="st">&quot;Omap is in inconstent state. Indexing at key:&quot;</span>
+                              , pretty k
+                              , pretty <span class="st">&quot;omap: &quot;</span>
+                              , pretty omap]
+
+<span class="ot">elems ::</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [a]
+elems omap <span class="fu">=</span> map (index_ omap) (keys omap) <span class="kw">where</span>
+
+<span class="ot">union ::</span> (<span class="dt">Eq</span> k, <span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+union (<span class="dt">OrderedMap</span>{order<span class="fu">=</span>o1, map&#39;<span class="fu">=</span>m1}) (<span class="dt">OrderedMap</span>{order<span class="fu">=</span>o2, map&#39;<span class="fu">=</span>m2}) <span class="fu">=</span>
+  <span class="dt">OrderedMap</span>{map&#39;<span class="fu">=</span>m1 <span class="ot">`M.union`</span> m2, order<span class="fu">=</span>L.nub(o1<span class="fu">++</span>o2)}
+
+<span class="co">-- | Return the list of key value pairs in the order of insertion.</span>
+<span class="ot">toList ::</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [(k, a)]
+toList omap <span class="fu">=</span> map (\k <span class="ot">-&gt;</span> (k, index_ omap k)) (keys omap)
+
+<span class="ot">adjust ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+adjust f k <span class="fu">=</span> liftMapEdit_ (M.adjust f k)
+
+<span class="ot">adjustWithKey ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> (k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+adjustWithKey f k <span class="fu">=</span> liftMapEdit_ (M.adjustWithKey f k)
+
+<span class="ot">(!) ::</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> a
+ok <span class="fu">!</span> k <span class="fu">=</span>
+  <span class="kw">case</span> (OrderedMap.lookup k ok) <span class="kw">of</span>
+           <span class="dt">Just</span> a <span class="ot">-&gt;</span> a
+           <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
+               vcat [pretty <span class="st">&quot;key missing, has no value associated with it: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty k,
+                     pretty <span class="st">&quot;map:&quot;</span>,
+                     indent <span class="dv">4</span> (pretty ok),
+                     pretty <span class="st">&quot;---&quot;</span>]
+
+<span class="ot">foldMapWithKey ::</span> <span class="dt">Monoid</span> m <span class="ot">=&gt;</span> (k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> m) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> m
+foldMapWithKey f <span class="fu">=</span> liftMapExtract_ (M.foldMapWithKey f)
+
+<span class="ot">fromListWith ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> [(k, a)] <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+fromListWith f kvs <span class="fu">=</span> <span class="dt">OrderedMap</span> {order<span class="fu">=</span>fmap fst kvs, map&#39;<span class="fu">=</span>M.fromListWith f kvs}
+
+<span class="ot">foldlWithKey ::</span> (a <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> b <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k b <span class="ot">-&gt;</span> a
+foldlWithKey f a <span class="fu">=</span> liftMapExtract_ (M.foldlWithKey f a)
+
+<span class="ot">mapWithKey ::</span> (k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k b
+mapWithKey f <span class="fu">=</span> liftMapEdit_ (M.mapWithKey f)
+
+<span class="ot">delete ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span>  k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
+delete key omap<span class="fu">@</span><span class="dt">OrderedMap</span>{<span class="fu">..</span>} <span class="fu">=</span> <span class="dt">OrderedMap</span> {order<span class="fu">=</span>L.delete key order, map&#39;<span class="fu">=</span>M.delete key map&#39; }</code></pre></div>
+</body>
+</html>

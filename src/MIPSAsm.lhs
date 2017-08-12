@@ -1,3 +1,4 @@
+\begin{code}
 {-# LANGUAGE DeriveAnyClass #-}
 module MIPSAsm(generateASM, ASMDoc(..)) where
 import qualified OrderedMap as M
@@ -153,3 +154,4 @@ generateASM program =
   ASMDoc $ vcat $ insts $ execState (do
     -- | Compile all basic blocks
     for (M.elems (irProgramBBMap program)) compileBB) (initASMContext program)
+\end{code}
