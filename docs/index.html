@@ -14,5 +14,50 @@ Tiny optimising compiler
 </h1>
 <p>Welcome to the tutorial series that teaches how to write a tiny optimising compiler in haskell!</p>
 <p>Start from: 1. <a href="language.html">The source language</a> 2. <a href="parser.html">The parser for the language</a> 3. <a href="ir.html">The internal representation</a> 3. <a href="transformmem2reg.html">The <code>mem2reg</code> transform that lands us into <code>SSA</code></a></p>
+<h2>
+Background
+</h2>
+<p>I've wanted to write this for a while: a tiny <em>optimising</em> compiler for a small imperative ish language.</p>
+<p>I want to show off modern compiler ideas, such as:</p>
+<ul>
+<li>SSA.</li>
+<li>optimisations enabled by SSA.</li>
+<li>Scalar evolution.</li>
+<li>Polyhedral compilation</li>
+</ul>
+<p>I currently have a parser for the source language, conversion to IR, then to SSA, and a semi-broken MIPS backend.</p>
+<h4>
+Goals
+</h4>
+<ul>
+<li>Be readable code.</li>
+<li>Be literate code (preferably).</li>
+<li>Show off real world optimisations.</li>
+</ul>
+<h4>
+Non goals
+</h4>
+<p>Shows the correct way of doing a lot of things, in the sense of &quot;engineering&quot;. I might pick the slower algorithm to compute a dominator tree, because I wish to emphasize the <em>idea</em> of the dominator tree. When a trade off is presented between simplicity and performance, I will pick simplicity.</p>
+<h4>
+Timeline
+</h4>
+<ul>
+<li>[x] Parse</li>
+<li>[x] Generate non-SSA IR</li>
+<li>[x] Convert non-SSA to SSA (<code>Mem2Reg</code> is the pass where this happens.)</li>
+<li>[ ] generate MIPS assembly from SSA IR (half-done)</li>
+<li>[ ] (Optional) generate LLVM for SSA IR (Can be pulled from <a href="http://github.com/bollu/simplexhc">simplexhc</a>)</li>
+</ul>
+<p>At this point, we have a &quot;functioning&quot; compiler. Now, we can extend the compiler or the language. I want to show off optimisations, so I will spend more time implementing optimisations</p>
+<ul>
+<li>[ ] Loop detection.</li>
+<li>[ ] Scalar evolution.</li>
+<li>[ ] Global value numbering.</li>
+<li>[ ] Dead code elimination.</li>
+<li>[ ] Loop unrolling.</li>
+<li>[ ] invariant load hoisting.</li>
+</ul>
+<p>Note that we do not yet have functions in the language! let's add that. - [ ] extend language with functions. - [ ] generate MIPS for functions. - [ ] Inlining.</p>
+<p>If we get here, we can then add polyhedral abilities to the compiler. For this though, we would need to integrate with <code>isl</code>. <strong>Someone</strong> will need to write haskell bindings <code>:)</code>.</p>
 </body>
 </html>
