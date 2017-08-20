@@ -30,7 +30,7 @@ type MIPSRegName = Doc ()
 type MIPSLabel = Doc ()
 
 data ASMContext = ASMContext {
-    instToReg :: M.OrderedMap (Label Inst) MIPSParam,
+    instToReg :: M.OrderedMap (Label Inst) MIPSRegName,
     insts :: [MIPSInst],
     irprogram :: IRProgram
 }

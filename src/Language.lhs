@@ -25,12 +25,12 @@ instance Pretty (Expr a) where
 
 type Expr' = Expr ()
 
-type Block a = [Stmt a]
 data Stmt a = If a (Expr a) (Block a) (Block a) |
               While a (Expr a) (Block a) |
               Assign a Literal (Expr a) |
               Define a Literal |
               Return a (Expr a)
+type Block a = [Stmt a]
 
 
 nestDepth :: Int

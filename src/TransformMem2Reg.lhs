@@ -12,7 +12,6 @@ module TransformMem2Reg(constructDominatorTree,
 
 import IR
 import Data.Tree
-import Data.List(nub)
 import qualified Data.Set as S
 import qualified OrderedMap as M
 import Data.Text.Prettyprint.Doc as PP
@@ -24,36 +23,11 @@ import qualified Data.Set as S
 import qualified Data.List.NonEmpty as NE
 import Control.Monad.State.Strict
 import Debug.Trace
-
--- | Represents a graph with `a` as a vertex ID type
-newtype Graph a = Graph { edges :: [(a, a)] }
-
-instance Pretty a => Pretty (Graph a) where
-  pretty graph =
-    vcat [pretty "BB graph edges",
-          (vcat . map (indent 4 . pretty) . edges $ graph)]
+import Graph
 
 -- | The control flow graph, which is a graph of basic blocks
 type CFG = Graph BBId
 
--- | return predecessors of a node
-getPredecessors :: Eq a => Graph a -> a -> [a]
-getPredecessors g bbid = [ src | (src, sink) <- (edges g), sink == bbid]
-
--- | Returns the children of an element in a dom tree
--- | This returns only the immediate children.
-getImmediateChildren :: Eq a => Graph a -> a -> [a]
-getImmediateChildren (Graph edges) a = [dest | (src, dest) <- edges, src==a]
-
--- | Return all the vertices of the subgraph
-getAllChildren :: Eq a => Graph a -> a -> [a]
-getAllChildren tree@(Graph edges) a =
-  a:(curChilds >>= (getAllChildren tree)) where
-  curChilds = getImmediateChildren tree a
-
--- | Return the set of vertices in DomTree
-vertices :: Eq a => Graph a  -> [a]
-vertices (Graph edges) = nub (map fst edges ++ map snd edges)
 
 -- | Get the successors of this basic block
 getBBSuccessors :: BasicBlock -> [BBId]
