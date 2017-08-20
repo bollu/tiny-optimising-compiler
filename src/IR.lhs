@@ -8,6 +8,7 @@ source code to.
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ViewPatterns #-}
 module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
@@ -15,6 +16,7 @@ import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
 import Data.Functor.Identity
 import Data.Traversable
+import Data.Functor.Identity
 
 data SSA
 data NotSSA
@@ -85,6 +87,8 @@ instance Pretty a => Pretty (Named a) where
 
 -- | Used to identify basic blocks
 type BBId = Label BasicBlock
+
+
 -- | A basic block. Single-entry, multiple-exit.
 data BasicBlock = BasicBlock {
   bbInsts :: [Named Inst],
@@ -128,10 +132,65 @@ forRetInstValue f (RetInstConditionalBranch v t e) =
     RetInstConditionalBranch <$> f v <*> pure t <*> pure e
 forRetInstValue f (RetInstRet v) = RetInstRet <$> f v
 
+mapRetInstValue :: (Value -> Value) -> RetInst -> RetInst
+mapRetInstValue f ret = runIdentity $ forRetInstValue (Identity . f) ret
+
 data IRProgram = IRProgram {
   irProgramBBMap :: M.OrderedMap BBId BasicBlock,
   irProgramEntryBBId :: BBId
 }
+
+-- | Map an effect over all the BBs of the IRProgram
+traverseIRProgramBBs :: Applicative f => (BasicBlock -> f BasicBlock) -> IRProgram -> f IRProgram
+traverseIRProgramBBs fbb (IRProgram bbmap entrybbid) = 
+    (IRProgram <$> bbmap' <*> pure entrybbid) where
+        bbmap' = traverse fbb bbmap
+
+-- | Map a pure effect over all BBs of the IRPRogram
+mapIRProgramBBs :: (BasicBlock -> BasicBlock) -> IRProgram -> IRProgram
+mapIRProgramBBs fbb program = runIdentity $ traverseIRProgramBBs (Identity . fbb) program
+
+
+-- | Remove an instruction from a basic block
+removeInstFromBB :: Label Inst -> BasicBlock -> BasicBlock
+removeInstFromBB toremovename (BasicBlock insts retinst lbl) =
+        BasicBlock insts' retinst lbl 
+    where insts' = filter ((/= toremovename) . namedName) insts
+
+-- | Run an effect on a basic block.
+traverseBB :: Applicative f => (Named Inst -> f (Named Inst)) 
+         -> (RetInst -> f (RetInst))
+         -> BasicBlock
+         -> f BasicBlock
+traverseBB finst fretinst (BasicBlock insts retinst lbl) =
+    BasicBlock <$> insts' <*> retinst' <*> pure lbl where
+        retinst' = fretinst retinst
+        insts' = for insts finst
+
+
+-- | Map over the instructions and return values of a basic block
+mapBB :: (Named Inst -> Named Inst)
+             -> (RetInst -> RetInst) -> BasicBlock -> BasicBlock
+mapBB finst fretinst bb = 
+    runIdentity $ traverseBB (Identity . finst) (Identity . fretinst) bb
+
+-- | Replace all uses of an instruction in a program
+replaceUsesOfInst :: Label Inst -> Value -> IRProgram -> IRProgram
+replaceUsesOfInst instlbl newval program = 
+    mapIRProgramBBs fbb program  where
+        replaceVal :: Value -> Value
+        replaceVal (ValueInstRef ((== instlbl) -> True)) = newval
+        replaceVal v = v
+
+        finst :: Named Inst -> Named Inst
+        finst = fmap (mapInstValue replaceVal)
+
+        fretinst :: RetInst -> RetInst
+        fretinst = mapRetInstValue replaceVal
+
+        fbb :: BasicBlock -> BasicBlock
+        fbb = mapBB finst fretinst
+
 
 instance Pretty IRProgram where
   pretty (IRProgram bbmap entryId) = vsep $ [pretty "entry: " <+> pretty entryId, pretty "program: "] ++
