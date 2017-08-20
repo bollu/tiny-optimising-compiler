@@ -17,6 +17,7 @@ import qualified OrderedMap as M
 import Data.Functor.Identity
 import Data.Traversable
 import Data.Functor.Identity
+import qualified Data.Monoid as M
 
 data SSA
 data NotSSA
@@ -150,6 +151,10 @@ traverseIRProgramBBs fbb (IRProgram bbmap entrybbid) =
 mapIRProgramBBs :: (BasicBlock -> BasicBlock) -> IRProgram -> IRProgram
 mapIRProgramBBs fbb program = runIdentity $ traverseIRProgramBBs (Identity . fbb) program
 
+-- | Collect results from basic blocks which can be monoidally smashed
+foldMapIRProgramBBs :: Monoid m => (BasicBlock -> m) -> IRProgram -> m
+foldMapIRProgramBBs fbb program = foldMap fbb (irProgramBBMap program)
+
 
 -- | Remove an instruction from a basic block
 removeInstFromBB :: Label Inst -> BasicBlock -> BasicBlock
@@ -166,6 +171,24 @@ traverseBB finst fretinst (BasicBlock insts retinst lbl) =
     BasicBlock <$> insts' <*> retinst' <*> pure lbl where
         retinst' = fretinst retinst
         insts' = for insts finst
+
+-- | Fold from the first instruction to the last one, and then on the
+-- | RetInst of a BB.
+foldlBB :: collect -> 
+           (collect -> Named Inst -> collect) -> 
+           (collect -> RetInst -> collect) -> 
+           BasicBlock -> collect
+foldlBB seed finst fretinst (BasicBlock insts retinst lbl) = 
+    fretinst (foldl finst seed insts) retinst
+
+
+-- | produce results on a BB and smash them together with  a monoid instance
+foldMapBB :: Monoid m => (Named Inst -> m) 
+    -> (RetInst -> m) 
+    -> BasicBlock 
+    ->  m
+foldMapBB finst fretinst bb = 
+    foldlBB mempty (\c i -> c M.<>  finst i) (\c ri -> c M.<> fretinst ri) bb
 
 
 -- | Map over the instructions and return values of a basic block

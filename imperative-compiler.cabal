@@ -61,7 +61,8 @@ executable imperative-compiler
                  MIPSAsm,
                  Graph,
                  RegisterAllocation,
-                 Language
+                 Language,
+                 TransformConstantFolding
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:

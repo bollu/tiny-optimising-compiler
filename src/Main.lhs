@@ -9,6 +9,7 @@ import ProgramToIR
 import System.IO
 import System.Environment
 import TransformMem2Reg
+import TransformConstantFolding
 import PrettyUtils
 import qualified OrderedMap as M
 import qualified MIPSAsm as MIPS
@@ -16,6 +17,26 @@ import qualified MIPSAsm as MIPS
 
 compileProgram :: Lang.Program a ->  IR.IRProgram
 compileProgram p = undefined
+
+pipeline :: [(String, IR.IRProgram -> IR.IRProgram)]
+pipeline = [("original", id),
+            ("mem2reg", transformMem2Reg),
+            ("constant fold", transformConstantFold)]
+
+runPasses :: [(String, IR.IRProgram -> IR.IRProgram)] -- ^ Pass pipeline
+    -> IR.IRProgram -- ^ Current program 
+    -> IO IR.IRProgram -- ^ Final program
+runPasses [] p = return p
+runPasses ((name, pass):passes) p = do
+    let p' = pass p
+    putStrLn . docToString $ pretty "*** Running pass " <+> 
+                             pretty name <+>
+                             pretty "- Value:" <+>
+                             pretty (runProgram p') <+>
+                             pretty "***"
+    putStrLn . prettyableToString $ p'
+    runPasses passes p'
+
 
 main :: IO ()
 main = do
@@ -27,36 +48,9 @@ main = do
             putStrLn "*** Program:"
             putStrLn . prettyableToString $  program
 
-            putStrLn "*** IR:"
             let irprogram =  programToIR program
-            putStrLn . prettyableToString $ irprogram
-
-            let cfg = mkBBGraph . IR.irProgramBBMap $ irprogram :: CFG
-
-            putStrLn "*** Dom info:"
-            let dominatorInfo = constructBBDominators irprogram
-            putStrLn . docToString . pretty $ dominatorInfo
-
-            putStrLn "*** Dominator tree: "
-            let dominatorTree = constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
-            putStrLn . prettyableToString $ dominatorTree
-
-            putStrLn "*** Dominance Frontiers: "
-            let domfrontiers = fmap (\bbid -> (bbid, getDominanceFrontier dominatorTree cfg bbid))
-                                    (M.keys . IR.irProgramBBMap $ irprogram) :: [(IR.BBId, [IR.BBId])]
-            putStrLn . docToString $ vcat (fmap pretty domfrontiers)
-
-
-            putStrLn "*** Mem2Reg ***"
-            let mem2regprog = transformMem2Reg irprogram
-            putStrLn . prettyableToString $  mem2regprog
-
-            putStrLn "*** Original program value ***"
-            putStrLn . prettyableToString . runProgram $ irprogram
-
-            putStrLn "*** Mem2Reg program value ***"
-            putStrLn . prettyableToString . runProgram $ mem2regprog
+            finalProgram <- runPasses pipeline irprogram
 
             putStrLn "*** MIPS assembly *** "
-            putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  mem2regprog
+            putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram
 \end{code}
