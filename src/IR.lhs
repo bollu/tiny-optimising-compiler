@@ -35,15 +35,15 @@ instance Pretty Value where
   pretty (ValueInstRef name) = pretty "%" <> pretty name
 
 -- | Instructions that we allow within a basic block.
-data Inst  where
-  InstAlloc :: Inst
-  InstAdd :: Value -> Value -> Inst
-  InstMul :: Value -> Value -> Inst
-  InstL :: Value -> Value -> Inst
-  InstAnd :: Value -> Value -> Inst
-  InstLoad :: Value -> Inst
-  InstStore :: Value -> Value -> Inst
-  InstPhi :: NE.NonEmpty (BBId, Value) -> Inst
+data Inst = InstAlloc 
+  | InstAdd Value Value
+  | InstMul Value Value
+  | InstL Value Value
+  | InstAnd Value Value
+  | InstLoad Value 
+  | InstStore Value Value
+  | InstPhi (NE.NonEmpty (BBId, Value)) deriving(Eq)
+
 
 -- | Map over the `Value`s in an Inst
 mapInstValue :: (Value -> Value) -> Inst -> Inst
@@ -75,7 +75,7 @@ instance Pretty Inst where
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
 -- | Represents @a that is optionally named by a @Label a
-data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable)
+data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable, Eq)
 
 
 -- | Infix operator for @Named constructor
@@ -95,7 +95,7 @@ data BasicBlock = BasicBlock {
   bbInsts :: [Named Inst],
   bbRetInst :: RetInst ,
   bbLabel :: Label BasicBlock
-}
+} deriving(Eq)
 
 -- | Default basic block.
 defaultBB :: BasicBlock
@@ -114,7 +114,7 @@ data RetInst =
   RetInstConditionalBranch Value BBId BBId |
   RetInstBranch BBId |
   RetInstTerminal |
-  RetInstRet Value
+  RetInstRet Value deriving(Eq)
 
 instance Pretty RetInst where
   pretty (RetInstTerminal) = pretty "TERMINAL"
@@ -139,7 +139,7 @@ mapRetInstValue f ret = runIdentity $ forRetInstValue (Identity . f) ret
 data IRProgram = IRProgram {
   irProgramBBMap :: M.OrderedMap BBId BasicBlock,
   irProgramEntryBBId :: BBId
-}
+} deriving(Eq)
 
 -- | Map an effect over all the BBs of the IRProgram
 traverseIRProgramBBs :: Applicative f => (BasicBlock -> f BasicBlock) -> IRProgram -> f IRProgram
