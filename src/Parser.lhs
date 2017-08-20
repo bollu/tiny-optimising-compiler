@@ -1,3 +1,9 @@
+<h1> Parser </h1>
+In this module, we define the parser for our source language. We use
+`trifecta` as our parser, and we import all our parser combinators from
+the `parsers` package.
+
+This module can be considered as a quick tutorial to `trifecta`.
 \begin{code}
 module Parser where
 
@@ -22,10 +28,31 @@ import Text.Parser.Token.Style (emptyOps)
 
 import Data.ByteString.Char8 as BS
 import qualified Text.PrettyPrint.ANSI.Leijen as TrifectaPP
+\end{code}
 
+
+\begin{code}
 -- import Data.Text.Prettyprint.Doc as PP
 (<??>) = flip (<?>)
 
+\end{code}
+
+<h2> Parsing identifiers </h2>
+
+`trifecta` needs us to tell it what the reserved keywords of our
+language are so it can skip those strings. To parse identifiers, we need
+three main components:
+
+- `_styleStart`, which is the characters that can act as the starting character
+of our identifier.
+
+- `_styleLetter`, which the parser will consume greedily when it sees a
+`_styleStart`
+
+- `_styleReserved`, which are strings that should *not* be considered identifiers
+because these are reserved keywords.
+
+\begin{code}
 -- | Syntax rules for parsing variable-looking like identifiers.
 identStyle :: IdentifierStyle Parser
 identStyle = IdentifierStyle
@@ -35,7 +62,14 @@ identStyle = IdentifierStyle
     , _styleReserved = HashSet.fromList ["define", "assign", "if", "else", "return", "*", "+", "<", "&&"]
     , _styleHighlight = Identifier
     , _styleReservedHighlight = ReservedIdentifier }
+\end{code}
 
+<h2> Standard parsers </h2>
+
+The only point of interest here is that we choose to name our parsers with the
+`<??>` combinator, which is used to provide better error messages.
+
+\begin{code}
 -- | Parse a variable identifier. Variables start with a lower-case letter or
 -- @_@, followed by a string consisting of alphanumeric characters or @'@, @_@.
 litp :: Parser Literal
@@ -51,7 +85,15 @@ boolp = ((const True) <$> symbol "true") <|> ((const False) <$> symbol "false")
 term   :: Parser Expr'
 term    =  (Text.Parser.Token.parens exprp
        <|> ELiteral () <$> litp <|> EInt () <$> intp) <?> "simple expression"
+\end{code}
 
+
+<h2> Expression Parsing </h2>
+
+Expression parsing is also very nice in `trifecta`, as one can create a table
+of operators with their priority and associativities and have that "just work".
+
+\begin{code}
 table  :: [[Operator Parser Expr']]
 table  = [[binary "*" Multiply AssocLeft],
           [binary "+" Plus  AssocLeft], 
