@@ -57,7 +57,7 @@ forInstValue f (InstMul lhs rhs) = InstMul <$> (f lhs) <*> (f rhs)
 forInstValue f (InstL lhs rhs) = InstL <$> (f lhs) <*> (f rhs)
 forInstValue f (InstAnd lhs rhs) = InstAnd <$> (f lhs) <*> (f rhs)
 forInstValue f (InstLoad lhs) = InstLoad <$> f lhs
-forInstValue f (InstStore lhs rhs) = InstAnd <$> (f lhs) <*> (f rhs)
+forInstValue f (InstStore lhs rhs) = InstStore <$> (f lhs) <*> (f rhs)
 forInstValue _ phi@(InstPhi _) = pure phi
 
 

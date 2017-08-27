@@ -7,15 +7,22 @@ compiler in haskell!
 
 Start from:
 
-1. [The source language](language.html)
+1. [The source language.](language.html)
 
-2. [The parser for the language](parser.html)
+2. [The parser for the language.](parser.html)
 
-3. [The internal representation](ir.html)
+3. [The internal representation.](ir.html)
 
-4. [The `mem2reg` transform that lands us into `SSA`](transformmem2reg.html)
+4. [The `mem2reg` transform that lands us into `SSA`.](transformmem2reg.html)
 
+5. [The `constant folding` transform that exploits `SSA` to "fold away" expressions
+    which can be evaluated at compile time.](transformconstantfolding.html)
 
+6. [The `register allocation` transform which allocates physical registers to
+    the infinite virtual registers of our SSA form.](registerallocation.html)
+
+7. [The `mipsasm` final code generation pass which generates
+    MIPS assembly.](MIPSAsm.html)
 <h2> Background </h2>
 
 I've wanted to write this for a while: a tiny *optimising* compiler for

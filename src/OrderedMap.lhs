@@ -23,6 +23,7 @@ module OrderedMap(OrderedMap,
   OrderedMap.lookup,
   delete) where
 import qualified Data.Map.Strict as M
+import Control.Applicative(liftA2)
 import Data.Monoid
 import PrettyUtils
 import Data.Text.Prettyprint.Doc
@@ -30,7 +31,13 @@ import qualified Data.List as L
 
 -- At some point, I need this. This is more convenient than overloading the key to store the insertion time.
 -- | A dictionary that orders elements by insertion time
-data OrderedMap k v = OrderedMap { map' :: M.Map k v, order :: [k] } deriving(Show, Functor, Foldable, Traversable, Eq)
+data OrderedMap k v = OrderedMap { map' :: M.Map k v, order :: [k] } deriving(Show, Functor, Eq)
+
+instance (Ord k, Pretty k) => Foldable (OrderedMap k) where
+ foldMap f omap = foldMap f (map snd . toList $ omap)
+
+instance (Ord k, Pretty k) => Traversable (OrderedMap k) where
+ traverse f omap = fmap fromList (traverse ((\(k, v) -> liftA2 (,) (pure k) (f v)))  (toList omap))
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (OrderedMap k v) where
   pretty (OrderedMap _ []) = pretty "empty map"
@@ -80,14 +87,11 @@ size = liftMapExtract_ M.size
 keys :: OrderedMap k a -> [k]
 keys  = order
 
-index_ :: (Pretty k, Pretty a, Ord k) => OrderedMap k a -> k -> a
+index_ :: (Ord k) => OrderedMap k a -> k -> a
 index_ omap k = case OrderedMap.lookup k omap of
             Just a -> a
             Nothing -> error . docToString $
-                         vcat [pretty "Omap is in inconstent state. Indexing at key:"
-                              , pretty k
-                              , pretty "omap: "
-                              , pretty omap]
+                         vcat [pretty "Omap is in inconstent state."]
 
 elems :: (Ord k, Pretty k, Pretty a) => OrderedMap k a -> [a]
 elems omap = map (index_ omap) (keys omap) where
@@ -97,7 +101,7 @@ union (OrderedMap{order=o1, map'=m1}) (OrderedMap{order=o2, map'=m2}) =
   OrderedMap{map'=m1 `M.union` m2, order=L.nub(o1++o2)}
 
 -- | Return the list of key value pairs in the order of insertion.
-toList :: (Ord k, Pretty k, Pretty a) => OrderedMap k a -> [(k, a)]
+toList :: (Ord k) => OrderedMap k a -> [(k, a)]
 toList omap = map (\k -> (k, index_ omap k)) (keys omap)
 
 adjust :: Ord k => (a -> a) -> k -> OrderedMap k a -> OrderedMap k a

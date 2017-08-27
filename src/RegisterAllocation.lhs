@@ -4,13 +4,30 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module RegisterAllocation(RegisterID,
 NRegisters,
-registerAllocate) where
+registerAllocate, LiveRange, makeLiveRange) where
 
 import IR
 import Graph
 
 type RegisterID = Int
 type NRegisters = Int
+
+data LiveRange = LiveRange (Int, Int)
+
+
+-- | Construct a live range from a begin and end time stamp
+makeLiveRange :: Int -> Int -> LiveRange
+makeLiveRange begin end = 
+    if end < begin
+    then error $ "need end" <+> 
+                 braces (pretty end) <+>
+                 pretty "> begin" <+>
+                 braces (pretty begin) <+> 
+                 pretty "for live range."
+
+-- | Return if two live ranges overlap
+doesLiveRangeOverlap :: LiveRange -> LiveRange -> Bool
+doesLiveRangeOverlap (l1b, l1e) (l2b, l2e) =  (l1e > l2b) || (l1b < l2e)
 
 -- we are assuming that all our registers are 32 bit int registers
 data RegisterAllocatorInput = RegisterAllocatorInput {

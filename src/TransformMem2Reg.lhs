@@ -1,3 +1,17 @@
+<h1> Memory to Register, or, how to get to SSA <h1>
+
+<h2> Equivalent LLVM passes </h2>
+
+- [Mem2Reg](https://llvm.org/docs/Passes.html#mem2reg-promote-memory-to-register)
+- [SROA](https://llvm.org/docs/Passes.html#sroa-scalar-replacement-of-aggregates)
+
+SROA is strictly more powerful that `mem2reg`, since it can break up arrays and
+structures into SSA form. However, the core algorithm remains the same.
+
+<h2> Introduction </h2>
+
+
+
 \begin{code}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -22,7 +36,6 @@ import qualified Data.Monoid as Monoid
 import qualified Data.Set as S
 import qualified Data.List.NonEmpty as NE
 import Control.Monad.State.Strict
-import Debug.Trace
 import Graph
 
 -- | The control flow graph, which is a graph of basic blocks
@@ -267,7 +280,7 @@ placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
 placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
     if null (curbbs)
     then bbmap
-    else trace debugStr (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
+    else (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
                 cur :: BBId
                 cur = S.elemAt 0 curbbs
 

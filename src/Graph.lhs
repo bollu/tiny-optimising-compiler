@@ -1,3 +1,17 @@
+<h1> Graph </h1>
+In this module, we define a simple `graph` structure that can be used
+as:
+
+- an undirected.
+- a directed graph.
+- a tree.
+
+Ideally, we would use some sort of phantom-type mechanism to distinguish
+between the two, that is `Graph Undirected a` and `Graph Directed a`, but
+oh well `:)`.
+
+
+
 \begin{code}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -45,17 +59,17 @@ _greedyColorGraph :: Ord a => Graph a -- ^ Graph
                             -> NGraphColors -- ^ Total number of graph colors available
                             -> M.OrderedMap a GraphColor -- ^ Final colored graph
 _greedyColorGraph _ (null -> True) coloring ncolors = coloring
-_greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  = 
+_greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
     _greedyColorGraph g vs' coloring' ncolors where
-        -- adjacent vertices 
+        -- adjacent vertices
         adjvs = (getPredecessors g v)
 
         -- colors of adjacent vertices
         adjColors :: [GraphColor]
         adjColors = mconcat $ fmap (\v -> maybeToList (v `M.lookup` coloring)) adjvs
 
-        -- largest color 
-        largestAdjColor = case adjColors of 
+        -- largest color
+        largestAdjColor = case adjColors of
                             [] -> 1
                             xs -> maximum xs
 
@@ -70,7 +84,7 @@ _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
 
 -- | Color the graph greedily and return the mapping of colors
 greedyColorGraph :: Ord a => Graph a -> NGraphColors -> M.OrderedMap a Int
-greedyColorGraph g ngraphcolors = 
+greedyColorGraph g ngraphcolors =
     _greedyColorGraph g (S.fromList (vertices g))
                       mempty ngraphcolors
 

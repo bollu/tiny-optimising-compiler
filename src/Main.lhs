@@ -10,6 +10,7 @@ import System.IO
 import System.Environment
 import TransformMem2Reg
 import TransformConstantFolding
+import TransformCanonicalizeForMIPS
 import PrettyUtils
 import qualified OrderedMap as M
 import qualified MIPSAsm as MIPS
@@ -21,7 +22,8 @@ compileProgram p = undefined
 pipeline :: [(String, IR.IRProgram -> IR.IRProgram)]
 pipeline = [("original", id),
             ("mem2reg", transformMem2Reg),
-            ("constant fold", transformConstantFold)]
+            ("constant fold", transformConstantFold),
+            ("Canonicalization for MIPS", transformCanonicalizeForMIPS)]
 
 runPasses :: [(String, IR.IRProgram -> IR.IRProgram)] -- ^ Pass pipeline
     -> IR.IRProgram -- ^ Current program 
@@ -29,12 +31,10 @@ runPasses :: [(String, IR.IRProgram -> IR.IRProgram)] -- ^ Pass pipeline
 runPasses [] p = return p
 runPasses ((name, pass):passes) p = do
     let p' = pass p
-    putStrLn . docToString $ pretty "*** Running pass " <+> 
-                             pretty name <+>
-                             pretty "- Value:" <+>
-                             pretty (runProgram p') <+>
-                             pretty "***"
+    putStrLn . docToString $ pretty "#  Running pass " <+> 
+                             pretty name
     putStrLn . prettyableToString $ p'
+    putStrLn . docToString $ pretty "- Value:" <+> pretty (runProgram p')
     runPasses passes p'
 
 
@@ -52,5 +52,5 @@ main = do
             finalProgram <- runPasses pipeline irprogram
 
             putStrLn "*** MIPS assembly *** "
-            putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram
+            -- putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram
 \end{code}

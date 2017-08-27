@@ -107,6 +107,8 @@ evaluateBB bbid = do
         Nothing -> return ()
         Just nextid -> evaluateBB nextid
 
+-- | TODO: convert to Either Error (Maybe Int)
+-- | The internal monad transformer would need to become EitherT
 runProgram :: IRProgram -> Maybe Int
 runProgram program = returnval $ execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)
 \end{code}
