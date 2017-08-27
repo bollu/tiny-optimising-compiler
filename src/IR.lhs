@@ -49,6 +49,7 @@ data Inst = InstAlloc
 mapInstValue :: (Value -> Value) -> Inst -> Inst
 mapInstValue f inst = runIdentity $ forInstValue (Identity . f) inst
 
+-- | TODO: use Uniplate.
 -- | Run an effect `f` over the values of an instruction
 forInstValue :: Applicative m => (Value -> m Value) -> Inst -> m Inst
 forInstValue _ (InstAlloc) = pure InstAlloc
