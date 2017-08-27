@@ -25,6 +25,7 @@ module TransformMem2Reg(constructDominatorTree,
     transformMem2Reg) where
 
 import IR
+import BaseIR
 import Data.Tree
 import qualified Data.Set as S
 import qualified OrderedMap as M
@@ -39,52 +40,52 @@ import Control.Monad.State.Strict
 import Graph
 
 -- | The control flow graph, which is a graph of basic blocks
-type CFG = Graph BBId
+type CFG = Graph IRBBId
 
 
 -- | Get the successors of this basic block
-getBBSuccessors :: BasicBlock -> [BBId]
+getBBSuccessors :: IRBB -> [IRBBId]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstTerminal}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstRet _}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
-mkBBGraph :: M.OrderedMap BBId BasicBlock -> CFG
+mkBBGraph :: M.OrderedMap IRBBId IRBB -> CFG
 mkBBGraph bbMap = Graph (M.foldMapWithKey makeEdges bbMap)  where
 
     -- Make the edges corresponding to basic block.
-    makeEdges :: BBId -> BasicBlock -> [(BBId, BBId)]
+    makeEdges :: IRBBId -> IRBB -> [(IRBBId, IRBBId)]
     makeEdges bbid bb = map (\succ -> (bbid, succ)) (getBBSuccessors bb)
 
 -- a dominator tree is a tree of basic blocks
-newtype DominatorTree  = Tree BasicBlock
+newtype DominatorTree  = Tree IRBB
 
 -- BBId of the root node.
-type EntryBBId = BBId
+type EntryBBId = IRBBId
 
 
 -- | Set of nodes that dominate a node.
-type DomSet =  S.Set BBId
+type DomSet =  S.Set IRBBId
 
 instance Pretty a => Pretty (S.Set a) where
   pretty = pretty . S.toList
 
 -- | Map from a node to the set of nodes that dominate it
-type BBIdToDomSet = M.OrderedMap BBId DomSet
+type BBIdToDomSet = M.OrderedMap IRBBId DomSet
 
 
 initialBBIdToDomSet :: EntryBBId ->  -- ^entry BB ID
-                  [BBId] ->  -- ^All BB IDs
+                  [IRBBId] ->  -- ^All BB IDs
                   BBIdToDomSet
 initialBBIdToDomSet entryid ids = M.fromList (mapEntry:mapAllExceptEntry) where
   -- entry block only dominantes itself
-  mapEntry :: (BBId, DomSet)
+  mapEntry :: (IRBBId, DomSet)
   mapEntry = (entryid, S.fromList [entryid])
   -- IDs other than the entry block
-  nonEntryIds :: [BBId]
+  nonEntryIds :: [IRBBId]
   nonEntryIds = filter (/= entryid) ids
   -- list mapping basic block Ids to dominance sets
-  mapAllExceptEntry ::  [(BBId, DomSet)]
+  mapAllExceptEntry ::  [(IRBBId, DomSet)]
   mapAllExceptEntry =  zip nonEntryIds (repeat allDomSet)
   -- all nodes in the dom set
   allDomSet :: DomSet
@@ -101,14 +102,14 @@ dominfoIterate :: EntryBBId -> -- ^Entry node ID
 dominfoIterate entryid cfg prevdominfo =  M.mapWithKey computeNewDom prevdominfo where
   -- For the root node, DomSet_iplus1(root) = root
   -- For a non-root node, DomSet_iplus1(n) = intersect (forall p \in preds(n) DomSet_i(p)) U {n}
-  computeNewDom :: BBId -> DomSet -> DomSet
+  computeNewDom :: IRBBId -> DomSet -> DomSet
   computeNewDom id old = if id == entryid then old else computeNewNonRootDom id
   -- compute the dom set of a node that is not the root
-  computeNewNonRootDom :: BBId -> DomSet
+  computeNewNonRootDom :: IRBBId -> DomSet
   computeNewNonRootDom bbid = (combinePredDomSets ((getDoms . preds) bbid)) `S.union` (S.singleton bbid)
 
   -- predecessors of id
-  preds :: BBId -> [BBId]
+  preds :: IRBBId -> [IRBBId]
   preds bbid = getPredecessors cfg bbid
 
   -- combine all predecessor dom sets by intersecting them
@@ -117,7 +118,7 @@ dominfoIterate entryid cfg prevdominfo =  M.mapWithKey computeNewDom prevdominfo
   combinePredDomSets ds = foldl1 S.intersection ds
 
   -- get dominators of ids
-  getDoms :: [BBId] -> [DomSet]
+  getDoms :: [IRBBId] -> [DomSet]
   getDoms bbids = map (prevdominfo M.!) bbids
 
 getFirstAdjacentEqual :: Eq a => [a] -> a
@@ -132,19 +133,19 @@ constructBBDominators program = getFirstAdjacentEqual iterations where
 
     -- graph structure
     cfg :: CFG
-    cfg =  mkBBGraph (irProgramBBMap program)
+    cfg =  mkBBGraph (programBBMap program)
 
     -- seed constructBBDominators
     initdominfo :: BBIdToDomSet
     initdominfo = initialBBIdToDomSet entryid bbids
 
     -- ID of the root node
-    entryid :: BBId
-    entryid = irProgramEntryBBId program
+    entryid :: IRBBId
+    entryid = programEntryBBId program
 
     -- list of all basic block IDs
-    bbids :: [BBId]
-    bbids = M.keys (irProgramBBMap program)
+    bbids :: [IRBBId]
+    bbids = M.keys (programBBMap program)
 
 
 data DomTreeContext = DomTreeContext {
@@ -153,18 +154,18 @@ data DomTreeContext = DomTreeContext {
 }
 
 -- | Returns the dominators of BBId
-getBBDominators :: BBId -> Reader DomTreeContext DomSet
+getBBDominators :: IRBBId -> Reader DomTreeContext DomSet
 getBBDominators bbid = do
   bbIdToDomSet <- reader ctxBBIdToDomSet
   return $ bbIdToDomSet M.! bbid
 
 -- | Returns the struct dominators of BBId
-getBBStrictDominators :: BBId -> Reader DomTreeContext DomSet
+getBBStrictDominators :: IRBBId -> Reader DomTreeContext DomSet
 getBBStrictDominators bbid = S.filter (/= bbid) <$> (getBBDominators bbid)
 
 
 -- | Returns whether y dominates x
-doesDominate :: BBId -> BBId -> Reader DomTreeContext Bool
+doesDominate :: IRBBId -> IRBBId -> Reader DomTreeContext Bool
 doesDominate x y = do
     bbIdToDomSet <- reader ctxBBIdToDomSet
     return $ x `S.member` (bbIdToDomSet M.! y)
@@ -174,13 +175,13 @@ allTraversable :: (Foldable t, Traversable t, Monad m) => t a -> (a -> m Bool) -
 allTraversable ta mpred = (foldl (&&) True) <$> (forM ta mpred)
 
 -- | Return if the BBId is dominated by all bbs *other than itself* in others
-isDominatedByAllOthers :: [BBId] -> BBId -> Reader DomTreeContext Bool
+isDominatedByAllOthers :: [IRBBId] -> IRBBId -> Reader DomTreeContext Bool
 isDominatedByAllOthers others self =
   allTraversable others(\other -> if other == self then return True
                                                     else doesDominate other self)
 
 -- | Returns the immediate dominator if present, otherwise returns Nothing
-getImmediateDominator :: BBId -> Reader DomTreeContext (Maybe BBId)
+getImmediateDominator :: IRBBId -> Reader DomTreeContext (Maybe IRBBId)
 getImmediateDominator bbid = do
     entryid <- reader ctxEntryId
     if entryid == bbid then
@@ -198,7 +199,7 @@ foldMapM :: (Foldable t, Monad m, Monoid r) => t a -> (a -> m r) -> m r
 foldMapM ta mfn = foldM (\monoid a -> (monoid Monoid.<>) <$> (mfn a)) mempty ta
 
 -- newtype DomTree = DomTree { domTreeEdges :: [(BBId, BBId)] }
-type DomTree = Graph BBId
+type DomTree = Graph IRBBId
 
 -- | internal reader that is not exported
 createDominatorTree_ :: Reader DomTreeContext DomTree
@@ -215,18 +216,18 @@ createDominatorTree_ = do
 
 
 -- | Construct the Dominator tree from the dominator sets and the entry BB
-constructDominatorTree :: M.OrderedMap BBId DomSet -> EntryBBId -> DomTree
+constructDominatorTree :: M.OrderedMap IRBBId DomSet -> EntryBBId -> DomTree
 constructDominatorTree bbidToDomSet entrybb  = runReader createDominatorTree_ (DomTreeContext bbidToDomSet entrybb)
 
 
 
 
 -- | The `dominates` relation. Given two BB Ids, returns whether `a` dominates `b`
-dominates :: DomTree -> BBId -> BBId -> Bool
+dominates :: DomTree -> IRBBId -> IRBBId -> Bool
 dominates tree a b = b `elem` (getAllChildren tree a)
 
 -- | Strictly dominates relation. `A` strictlyDom `B` iff `A` Dom `B` and `A` /= `B`
-strictlyDominates :: DomTree -> BBId -> BBId -> Bool
+strictlyDominates :: DomTree -> IRBBId -> IRBBId -> Bool
 strictlyDominates domtree a b = dominates domtree a b && a /= b
 
 -- | Get the list of dominance frontiers of a given BB
@@ -234,14 +235,14 @@ strictlyDominates domtree a b = dominates domtree a b && a /= b
 -- |  dominates an immediate predecessor of n, but d does not strictly dominate
 -- |  n. It is the set of nodes where d's dominance stops."
 -- | TODO: think anbout why *an immediate preceseeor*, not *all immediate ...*.
-getDominanceFrontier :: DomTree -> CFG -> BBId -> [BBId]
+getDominanceFrontier :: DomTree -> CFG -> IRBBId -> [IRBBId]
 getDominanceFrontier tree@(Graph domedges) cfg cur =
   [bb | bb <- vertices tree, any (dominates tree cur) (preds bb) , not (strictlyDominates tree cur bb)] where
   preds bb = (getPredecessors cfg bb)
 
 
 -- Get the names of all values allocated in a basic block
-getBBVarUses :: BasicBlock -> [Label Inst]
+getBBVarUses :: IRBB -> [Label Inst]
 getBBVarUses (BasicBlock{bbInsts=bbInsts}) =
   bbInsts >>= \(Named name inst) -> case inst of
                                         InstAlloc -> [name]
@@ -258,7 +259,7 @@ unsafeToNonEmpty [] = error "unable to convert empty list to non empty"
 unsafeToNonEmpty (x:xs) = x NE.:| xs
 
 -- | For a given basic block, insert a phi node at the top
-insertPhiNodeCallback_ :: CFG -> Label Inst -> BBId -> BasicBlock -> BasicBlock
+insertPhiNodeCallback_ :: CFG -> Label Inst -> IRBBId -> IRBB -> IRBB
 insertPhiNodeCallback_ cfg lbl bbid bb@(BasicBlock{..}) =
     bb {bbInsts=bbInsts'} where
     bbInsts' :: [Named Inst]
@@ -271,30 +272,30 @@ insertPhiNodeCallback_ cfg lbl bbid bb@(BasicBlock{..}) =
 -- | Place Phi nodes for a given instruction at a set of start CFGs. Initially, they should be the
 -- |  set of nodes that store to the original value
 placePhiNodesForAlloc_ :: Label Inst -- ^Name of the original value
-                          -> S.Set BBId -- ^BBs to process
-                          -> S.Set BBId -- ^BBs that are already processed
+                          -> S.Set IRBBId -- ^BBs to process
+                          -> S.Set IRBBId -- ^BBs that are already processed
                           -> CFG -- ^The CFG of the function
                           -> DomTree -- ^The dominator tree of the function
-                          -> M.OrderedMap BBId BasicBlock -- ^Function body
-                          -> M.OrderedMap BBId BasicBlock
+                          -> M.OrderedMap IRBBId IRBB -- ^Function body
+                          -> M.OrderedMap IRBBId IRBB
 placePhiNodesForAlloc_ name curbbs processed cfg domtree bbmap =
     if null (curbbs)
     then bbmap
     else (placePhiNodesForAlloc_ name curbbs' processed' cfg domtree bbmap')  where
-                cur :: BBId
+                cur :: IRBBId
                 cur = S.elemAt 0 curbbs
 
                 -- | For every basic block in the dominance frontier, insert a phi node.
-                bbmap' :: M.OrderedMap BBId BasicBlock
+                bbmap' :: M.OrderedMap IRBBId IRBB
                 bbmap' = adjustWithKeys (insertPhiNodeCallback_ cfg name) curfrontier bbmap
 
-                curbbs' :: S.Set BBId
+                curbbs' :: S.Set IRBBId
                 curbbs' = (curbbs `S.union` curfrontier) S.\\ processed'
 
-                curfrontier ::  S.Set BBId
+                curfrontier ::  S.Set IRBBId
                 curfrontier = (S.fromList $ getDominanceFrontier domtree cfg cur) S.\\ processed'
 
-                processed' :: S.Set BBId
+                processed' :: S.Set IRBBId
                 processed' = (S.insert cur processed)
 
                 debugStr :: String
@@ -304,19 +305,19 @@ mapReverse :: (Pretty k, Pretty a, Ord k, Ord a) => M.OrderedMap k [a] -> M.Orde
 mapReverse m = M.fromListWith (++) [(a, [k]) | (k, as) <- M.toList m, a <- as]
 
 -- References: http://www.cs.is.noda.tus.ac.jp/~mune/keio/m/ssa2.pdf
-placePhiNodes_ :: CFG -> DomTree -> M.OrderedMap BBId BasicBlock -> M.OrderedMap BBId BasicBlock
+placePhiNodes_ :: CFG -> DomTree -> M.OrderedMap IRBBId IRBB -> M.OrderedMap IRBBId IRBB
 placePhiNodes_ cfg domtree initbbmap =
     M.foldlWithKey (\curbbmap name bbids -> placePhiNodesForAlloc_ name (S.fromList bbids) mempty cfg domtree curbbmap) initbbmap usesToBBIds  where
-      bbIdToUses :: M.OrderedMap BBId [Label Inst]
+      bbIdToUses :: M.OrderedMap IRBBId [Label Inst]
       bbIdToUses = fmap getBBVarUses initbbmap
 
-      usesToBBIds :: M.OrderedMap (Label Inst) [BBId]
+      usesToBBIds :: M.OrderedMap (Label Inst) [IRBBId]
       usesToBBIds = mapReverse bbIdToUses
 
 -- | Find wherever this variable is "declared". An Alloca or a Phi node is considered a declare
-getVarDeclBBIds :: M.OrderedMap BBId BasicBlock -> M.OrderedMap (Label Inst) [BBId]
+getVarDeclBBIds :: M.OrderedMap IRBBId IRBB -> M.OrderedMap (Label Inst) [IRBBId]
 getVarDeclBBIds bbs = M.fromListWith (++) $ do
-    (k :: BBId , bb) <- M.toList bbs
+    (k :: IRBBId , bb) <- M.toList bbs
     inst <- bbInsts bb
     guard $ isDeclInst_ inst
 
@@ -330,8 +331,8 @@ getVarDeclBBIds bbs = M.fromListWith (++) $ do
 -- | Rename all instructions in a basic block
 renameInstsInBB :: Label Inst -- ^Old label
                  -> Label Inst -- ^New label
-                 -> BasicBlock -- ^Basic Block to repalce in
-                 -> BasicBlock
+                 -> IRBB -- ^Basic Block to replace in
+                 -> IRBB
 renameInstsInBB oldl newl (bb@BasicBlock{bbInsts=bbInsts}) = bb {
     bbInsts=map replaceLabel bbInsts
 } where
@@ -351,15 +352,15 @@ renameInstsInBB oldl newl (bb@BasicBlock{bbInsts=bbInsts}) = bb {
 renameInstsInDomSet :: Label Inst -- ^Original label
                    -> Label Inst -- ^New label
                    -> BBIdToDomSet -- ^Dominator sets
-                   -> BBId -- ^ID to BB to start from
-                   -> M.OrderedMap BBId BasicBlock
-                   -> M.OrderedMap BBId BasicBlock
+                   -> IRBBId -- ^ID to BB to start from
+                   -> M.OrderedMap IRBBId IRBB
+                   -> M.OrderedMap IRBBId IRBB
 renameInstsInDomSet l l' bbIdToDomSet bbid bbmap =
     adjustWithKeys renamer domset bbmap where
-        domset :: S.Set BBId
+        domset :: S.Set IRBBId
         domset = bbIdToDomSet M.! bbid
 
-        renamer :: BBId -> BasicBlock -> BasicBlock
+        renamer :: IRBBId -> IRBB -> IRBB
         renamer _ bb = renameInstsInBB l l' bb
 
 
@@ -380,7 +381,7 @@ data VariableRenameContext = VariableRenameContext {
   -- | This is used to collapse load / store in a BB.
   ctxVarToLatestStoreVal :: M.OrderedMap (Label Inst) Value,
   -- | Function
-  ctxBBMap :: M.OrderedMap (BBId) BasicBlock
+  ctxBBMap :: M.OrderedMap (IRBBId) IRBB
 }
 instance Pretty VariableRenameContext where
     pretty (VariableRenameContext{..}) =
@@ -489,8 +490,8 @@ variableRenameRetInst :: RetInst -> State VariableRenameContext (RetInst)
 variableRenameRetInst ret = forRetInstValue renameStoredValue_ ret
 
 -- | Rename phi nodes in bb
-variableRenamePhiNodes :: BBId -- ^Current BB Id
-                          -> BBId -- ^Phi node BB Id
+variableRenamePhiNodes :: IRBBId -- ^Current BB Id
+                          -> IRBBId -- ^Phi node BB Id
                           -> State VariableRenameContext ()
 variableRenamePhiNodes curbbid phibbid = do
     varToValue <- gets ctxVarToLatestStoreVal
@@ -504,20 +505,20 @@ variableRenamePhiNodes curbbid phibbid = do
     modify (\ctx -> ctx { ctxBBMap= M.insert phibbid phibb' (ctxBBMap ctx) })
     where
     -- | Rename only phi ndoes leaving other instructions
-    phiRenamer :: BBId -- ^ Current BB Id
+    phiRenamer :: IRBBId -- ^ Current BB Id
                   -> Inst -- ^Instruction from the child BB
                   -> State VariableRenameContext Inst
     phiRenamer curbbid (InstPhi philist) = InstPhi <$> (renamePhiList curbbid philist)
     phiRenamer _ (inst) = return inst
 
     -- | Rename bindings in a phi node
-    renamePhiList :: BBId -- ^ Current BB Id
-                     -> NE.NonEmpty (BBId, Value) -- ^Phi node parameters
-                     -> State VariableRenameContext (NE.NonEmpty (BBId, Value))
+    renamePhiList :: IRBBId -- ^ Current BB Id
+                     -> NE.NonEmpty (IRBBId, Value) -- ^Phi node parameters
+                     -> State VariableRenameContext (NE.NonEmpty (IRBBId, Value))
     renamePhiList curbbid philist =
       forM philist (renamePhiBinding curbbid)
     -- | Rename a single binding in the phi node entry list
-    renamePhiBinding :: BBId -> (BBId, Value) -> State VariableRenameContext (BBId, Value)
+    renamePhiBinding :: IRBBId -> (IRBBId, Value) -> State VariableRenameContext (IRBBId, Value)
     renamePhiBinding curbbid (bbid, value) = (bbid,)  <$> stateValue'
         where stateValue' = if bbid == curbbid
                         then renameStoredValue_ value
@@ -528,7 +529,7 @@ resetVarMappings :: VariableRenameContext -> State VariableRenameContext ()
 resetVarMappings parentctx = modify (\ctx -> ctx { ctxVarToLatestStoreVal=ctxVarToLatestStoreVal parentctx })
 
 -- | Rename all instructions and the return instructoin at a given BB
-instructionsRenameAtBB :: BBId -> State VariableRenameContext ()
+instructionsRenameAtBB :: IRBBId -> State VariableRenameContext ()
 instructionsRenameAtBB curbbid = do
   bbmap <- gets ctxBBMap
   modify (\ctx -> ctx { ctxBBMap= (ctxBBMap ctx) })
@@ -548,7 +549,7 @@ instructionsRenameAtBB curbbid = do
 -- 3. follow process into children of dominator tree
 -- TODO: fold current BBId into the state or something, this is a HUGE mess.
 -- | Like seriously, I hate myself a little for *writing* this bastard.
-variableRenameAtBB :: CFG -> DomTree -> BBId -> State VariableRenameContext ()
+variableRenameAtBB :: CFG -> DomTree -> IRBBId -> State VariableRenameContext ()
 variableRenameAtBB cfg domtree curbbid = do
   parentctx <- get
   -- | Rename all instructions at BB
@@ -571,9 +572,9 @@ variableRenameAtBB cfg domtree curbbid = do
 -- | Rename variables to be unique in the function.
 lowerMemToReg :: CFG  -- ^ The CFG for the program.
                    -> DomTree -- ^Dominator tree for the program.
-                   -> BBId -- ^Entry BBId
-                   -> M.OrderedMap BBId BasicBlock -- ^Function
-                   -> M.OrderedMap BBId BasicBlock
+                   -> IRBBId -- ^Entry BBId
+                   -> M.OrderedMap IRBBId IRBB -- ^Function
+                   -> M.OrderedMap IRBBId IRBB
 lowerMemToReg cfg domtree entrybbid bbmap =
     ctxBBMap $ execState (variableRenameAtBB cfg domtree entrybbid) initctx where
       initctx :: VariableRenameContext
@@ -581,13 +582,11 @@ lowerMemToReg cfg domtree entrybbid bbmap =
                                         ctxVarToLatestStoreVal=mempty
                                       }
 
-renumber :: BBId -> M.OrderedMap BBId BasicBlock -> M.OrderedMap BBId BasicBlock
-renumber entryBBId prog = prog
 
 transformMem2Reg :: IRProgram -> IRProgram
-transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
-                           irProgramEntryBBId=entrybbid} =
-    (IRProgram {irProgramBBMap=bbmapReg, irProgramEntryBBId=entrybbid}) where
+transformMem2Reg program@Program{programBBMap=bbmap,
+                           programEntryBBId=entrybbid} =
+    (Program {programBBMap=bbmapReg, programEntryBBId=entrybbid}) where
       cfg :: CFG
       cfg =  mkBBGraph bbmap
 
@@ -597,10 +596,9 @@ transformMem2Reg program@IRProgram{irProgramBBMap=bbmap,
       domtree :: DomTree
       domtree = constructDominatorTree bbIdToDomSet entrybbid
 
-      bbmapWithPhi :: M.OrderedMap BBId BasicBlock
+      bbmapWithPhi :: M.OrderedMap IRBBId IRBB
       bbmapWithPhi = (placePhiNodes_ cfg domtree) $ bbmap
 
       bbmapReg = (lowerMemToReg cfg domtree entrybbid) bbmapWithPhi
 
-      bbmapNumbered = renumber entrybbid bbmapReg
 \end{code}

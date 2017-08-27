@@ -12,6 +12,7 @@ import Data.Foldable
 import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import IR
+import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 

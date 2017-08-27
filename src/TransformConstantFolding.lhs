@@ -77,6 +77,7 @@ import Data.Foldable
 import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import IR
+import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 
@@ -112,7 +113,7 @@ transformConstantFold = runTillStable (foldProgram)  where
 
     -- | Collection of instruction names and values
     foldableInsts :: IRProgram -> [(Label Inst, Value)]
-    foldableInsts p = foldMapIRProgramBBs (foldMapBB (collectFoldableInsts) (const mempty)) p
+    foldableInsts p = foldMapProgramBBs (foldMapBB (collectFoldableInsts) (const mempty)) p
 
     -- | Program after constant folding
     foldProgram :: IRProgram -> IRProgram
@@ -120,7 +121,7 @@ transformConstantFold = runTillStable (foldProgram)  where
 
     -- | program after dead code elimination
     dceProgram :: IRProgram -> IRProgram
-    dceProgram program = 
-        foldl (\p name -> mapIRProgramBBs (removeInstFromBB name) p) program (map fst (foldableInsts program))
+    dceProgram program =
+        foldl (\p name -> filterProgramInsts (not . hasName name) p) program (map fst (foldableInsts program))
 
 \end{code}

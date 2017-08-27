@@ -1,0 +1,134 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<h1>
+Graph
+</h1>
+<p>In this module, we define a simple <code>graph</code> structure that can be used as:</p>
+<ul>
+<li>an undirected.</li>
+<li>a directed graph.</li>
+<li>a tree.</li>
+</ul>
+<p>Ideally, we would use some sort of phantom-type mechanism to distinguish between the two, that is <code>Graph Undirected a</code> and <code>Graph Directed a</code>, but oh well <code>:)</code>.</p>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE ViewPatterns #-}</span>
+
+<span class="kw">module</span> <span class="dt">Graph</span> <span class="kw">where</span>
+<span class="kw">import </span><span class="dt">Data.List</span>(nub)
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Data.Maybe</span> (maybeToList)
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Set</span> <span class="kw">as</span> <span class="dt">S</span>
+
+<span class="co">-- | Represents a graph with `a` as a vertex ID type</span>
+<span class="kw">newtype</span> <span class="dt">Graph</span> a <span class="fu">=</span> <span class="dt">Graph</span> {<span class="ot"> edges ::</span> [(a, a)] }
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">Graph</span> a) <span class="kw">where</span>
+  pretty graph <span class="fu">=</span>
+    vcat [pretty <span class="st">&quot;BB graph edges&quot;</span>,
+          (vcat <span class="fu">.</span> map (indent <span class="dv">4</span> <span class="fu">.</span> pretty) <span class="fu">.</span> edges <span class="fu">$</span> graph)]
+
+<span class="co">-- | return predecessors of a node</span>
+<span class="ot">getPredecessors ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getPredecessors g bbid <span class="fu">=</span> [ src <span class="fu">|</span> (src, sink) <span class="ot">&lt;-</span> (edges g), sink <span class="fu">==</span> bbid]
+
+<span class="co">-- | Returns the children of an element in a dom tree</span>
+<span class="co">-- | This returns only the immediate children.</span>
+<span class="ot">getImmediateChildren ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getImmediateChildren (<span class="dt">Graph</span> edges) a <span class="fu">=</span> [dest <span class="fu">|</span> (src, dest) <span class="ot">&lt;-</span> edges, src<span class="fu">==</span>a]
+
+<span class="co">-- | Return all the vertices of the subgraph</span>
+<span class="ot">getAllChildren ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+getAllChildren tree<span class="fu">@</span>(<span class="dt">Graph</span> edges) a <span class="fu">=</span>
+  a<span class="fu">:</span>(curChilds <span class="fu">&gt;&gt;=</span> (getAllChildren tree)) <span class="kw">where</span>
+  curChilds <span class="fu">=</span> getImmediateChildren tree a
+
+<span class="co">-- | Return the set of vertices in DomTree</span>
+<span class="ot">vertices ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a  <span class="ot">-&gt;</span> [a]
+vertices (<span class="dt">Graph</span> edges) <span class="fu">=</span> nub (map fst edges <span class="fu">++</span> map snd edges)
+
+<span class="kw">type</span> <span class="dt">GraphColor</span> <span class="fu">=</span> <span class="dt">Int</span>
+<span class="kw">type</span> <span class="dt">NGraphColors</span> <span class="fu">=</span> <span class="dt">Int</span>
+
+<span class="ot">_greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="co">-- ^ Graph </span>
+                            <span class="ot">-&gt;</span> <span class="dt">S.Set</span> a <span class="co">-- ^ Set of vertices</span>
+                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">GraphColor</span> <span class="co">-- ^ Mapping from vertices to colors</span>
+                            <span class="ot">-&gt;</span> <span class="dt">NGraphColors</span> <span class="co">-- ^ Total number of graph colors available</span>
+                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">GraphColor</span> <span class="co">-- ^ Final colored graph</span>
+_greedyColorGraph _ (null <span class="ot">-&gt;</span> <span class="dt">True</span>) coloring ncolors <span class="fu">=</span> coloring
+_greedyColorGraph g vs<span class="fu">@</span>(S.elemAt <span class="dv">0</span> <span class="ot">-&gt;</span> v) coloring ncolors  <span class="fu">=</span>
+    _greedyColorGraph g vs&#39; coloring&#39; ncolors <span class="kw">where</span>
+        <span class="co">-- adjacent vertices</span>
+        adjvs <span class="fu">=</span> (getPredecessors g v)
+
+        <span class="co">-- colors of adjacent vertices</span>
+<span class="ot">        adjColors ::</span> [<span class="dt">GraphColor</span>]
+        adjColors <span class="fu">=</span> mconcat <span class="fu">$</span> fmap (\v <span class="ot">-&gt;</span> maybeToList (v <span class="ot">`M.lookup`</span> coloring)) adjvs
+
+        <span class="co">-- largest color</span>
+        largestAdjColor <span class="fu">=</span> <span class="kw">case</span> adjColors <span class="kw">of</span>
+                            [] <span class="ot">-&gt;</span> <span class="dv">1</span>
+                            xs <span class="ot">-&gt;</span> maximum xs
+
+        <span class="co">-- Leave it uncolored it we can&#39;t find a color</span>
+        coloring&#39; <span class="fu">=</span> <span class="kw">if</span> largestAdjColor <span class="fu">==</span> ncolors
+                <span class="kw">then</span> coloring
+                <span class="kw">else</span> M.insert v (largestAdjColor <span class="fu">+</span> <span class="dv">1</span>) coloring
+
+        <span class="co">-- remove vertex we currently processed</span>
+        vs&#39; <span class="fu">=</span> S.deleteAt <span class="dv">0</span> vs
+
+
+<span class="co">-- | Color the graph greedily and return the mapping of colors</span>
+<span class="ot">greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> <span class="dt">NGraphColors</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">Int</span>
+greedyColorGraph g ngraphcolors <span class="fu">=</span>
+    _greedyColorGraph g (S.fromList (vertices g))
+                      mempty ngraphcolors</code></pre></div>
+</body>
+</html>

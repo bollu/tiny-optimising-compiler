@@ -2,6 +2,7 @@
 module ProgramToIR where
 import Language
 import IR
+import BaseIR
 import qualified OrderedMap as M
 import Data.Traversable
 import Data.Foldable
@@ -12,11 +13,11 @@ import Data.Text.Prettyprint.Doc as PP
 
 data Builder = Builder {
   -- | The first BB that is present in the module
-  entryBBId :: BBId,
+  entryBBId :: IRBBId,
  -- | The BB the builder is currently focused on
-  currentBBId :: BBId,
-  -- | Mapping from BBId to BasicBlock
-  bbIdToBB :: M.OrderedMap BBId BasicBlock,
+  currentBBId :: IRBBId,
+  -- | Mapping from BBId to IRBB
+  bbIdToBB :: M.OrderedMap IRBBId IRBB,
   -- | counter to generate new instruction name
   tmpInstNamesCounter :: Int,
   -- | Map from name to count of number of times name has occured
@@ -46,20 +47,20 @@ newBuilder =
     })
 
 -- | Get the current Basic block ID
-getCurrentBBId :: State Builder BBId
+getCurrentBBId :: State Builder IRBBId
 getCurrentBBId = gets currentBBId
 
 -- | Focus the basic block given by the ID
-focusBB :: BBId -> State Builder ()
+focusBB :: IRBBId -> State Builder ()
 focusBB id = modify (\b-> b { currentBBId=id })
 
 -- | Append a new basic block. DOES NOT switch the currentBBId to the new basic block. For that, see focusBB
-createNewBB :: Label Builder -> State Builder BBId
+createNewBB :: Label Builder -> State Builder IRBBId
 createNewBB name = do
   idtobbs <- gets bbIdToBB
   let nbbs = M.size idtobbs
   let nameunique = Label ((unLabel name) ++ "." ++ show nbbs)
-  let newbb = defaultBB { bbLabel=nameunique }
+  let newbb = defaultIRBB { bbLabel=nameunique }
   modify (\b -> b { bbIdToBB = M.insert nameunique newbb idtobbs  } )
   return nameunique
 
@@ -108,13 +109,13 @@ getLiteralValueMapping lit = do
 
 -- | lift an edit of a basic block to the current basic block focused
 -- | in the Builder.
-liftBBEdit :: (BasicBlock -> BasicBlock) -> Builder -> Builder
+liftBBEdit :: (IRBB -> IRBB) -> Builder -> Builder
 liftBBEdit f builder = builder {
     bbIdToBB = M.adjust f (currentBBId builder) (bbIdToBB builder)
 }
 
 -- | Set the builder's current basic block to the i'th basic block
-setBB :: Builder -> BBId -> Builder
+setBB :: Builder -> IRBBId -> Builder
 setBB builder i = builder {
   currentBBId = i
 }
@@ -126,14 +127,14 @@ appendInst i = do
   modify . liftBBEdit $ (appendInstToBB i)
   return $ ValueInstRef (namedName i)
   where
-    appendInstToBB :: Named Inst -> BasicBlock -> BasicBlock
+    appendInstToBB :: Named Inst -> IRBB -> IRBB
     appendInstToBB i bb = bb { bbInsts=bbInsts bb ++ [i] }
 
 setRetInst :: RetInst -> State Builder ()
 setRetInst i = do
   modify . liftBBEdit $ (setBBRetInst i)
   where
-    setBBRetInst :: RetInst -> BasicBlock -> BasicBlock
+    setBBRetInst :: RetInst -> IRBB -> IRBB
     setBBRetInst i bb = bb { bbRetInst=i }
 
 
@@ -239,13 +240,10 @@ stmtsToInsts stmts = (for_ stmts buildStmt)
 
 
 programToIR :: Program' -> IRProgram
-programToIR (Program stmts) =
-  IRProgram {
-    irProgramBBMap = bbIdToBB  builder,
-    irProgramEntryBBId = entryBBId builder
+programToIR (Language.Program stmts) =
+  BaseIR.Program {
+    programBBMap = bbIdToBB  builder,
+    programEntryBBId = entryBBId builder
   } where
       builder = execState (stmtsToInsts stmts) newBuilder
-
-
-type DominatorTree = T.Tree BBId
 \end{code}

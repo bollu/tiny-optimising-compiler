@@ -14,6 +14,7 @@ module OrderedMap(OrderedMap,
   elems,
   toList,
   keys,
+  editKeys,
   (!),
   union,
   fromListWith,
@@ -24,6 +25,7 @@ module OrderedMap(OrderedMap,
   delete) where
 import qualified Data.Map.Strict as M
 import Control.Applicative(liftA2)
+import qualified Control.Arrow as A
 import Data.Monoid
 import PrettyUtils
 import Data.Text.Prettyprint.Doc
@@ -131,6 +133,11 @@ foldlWithKey f a = liftMapExtract_ (M.foldlWithKey f a)
 
 mapWithKey :: (k -> a -> b) -> OrderedMap k a -> OrderedMap k b
 mapWithKey f = liftMapEdit_ (M.mapWithKey f)
+
+-- | Change the keys of the map, without changing the order.
+editKeys :: (Ord k, Ord k') => (k -> k') -> OrderedMap k a -> OrderedMap k' a
+editKeys f = fromList . map (f A.*** id) . toList
+
 
 delete :: Ord k =>  k -> OrderedMap k a -> OrderedMap k a
 delete key omap@OrderedMap{..} = OrderedMap {order=L.delete key order, map'=M.delete key map' }

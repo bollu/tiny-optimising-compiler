@@ -8,13 +8,14 @@ import Data.Foldable
 import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import IR
+import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 
 
 data Evaluator = Evaluator {
     program :: IRProgram,
-    prevbbid :: Maybe BBId,
+    prevbbid :: Maybe IRBBId,
     valueMap :: M.OrderedMap (Label Inst) Int,
     returnval :: Maybe Int
 }
@@ -55,7 +56,7 @@ getValue :: Value -> State Evaluator Int
 getValue (ValueConstInt i) = return i
 getValue (ValueInstRef name) = loadName name
 
-getPreviousBBId :: State Evaluator BBId
+getPreviousBBId :: State Evaluator IRBBId
 getPreviousBBId = do
     prevbb <- gets prevbbid
     case prevbb of
@@ -76,14 +77,14 @@ evaluateInst namedinst@(Named lhsname inst) = do
                 prevbbid <- getPreviousBBId
                 getValue (snd (getCurrentBBIdValue prevbbid))  >>= setValue lhsname
             where
-                pred :: BBId -> (BBId, Value) -> Bool
+                pred :: IRBBId -> (IRBBId, Value) -> Bool
                 pred prevbbid (bbid, _) = bbid == prevbbid
 
-                getCurrentBBIdValue :: BBId -> (BBId, Value)
+                getCurrentBBIdValue :: IRBBId -> (IRBBId, Value)
                 getCurrentBBIdValue prevbbid = head . NE.filter (pred prevbbid) $ bbidValuePairs
 
 
-followRetInst :: RetInst -> State Evaluator (Maybe BBId)
+followRetInst :: RetInst -> State Evaluator (Maybe IRBBId)
 followRetInst (RetInstTerminal) = return Nothing
 followRetInst (RetInstBranch bbid) = return (Just bbid)
 followRetInst (RetInstConditionalBranch val t e) = do
@@ -96,9 +97,9 @@ followRetInst (RetInstRet retval) = do
     modify (\evaluator -> evaluator { returnval=Just retvalInt})
     return Nothing
 
-evaluateBB :: BBId -> State Evaluator ()
+evaluateBB :: IRBBId -> State Evaluator ()
 evaluateBB bbid = do
-    bb <- gets $ (M.! bbid) . irProgramBBMap . program
+    bb <- gets $ (M.! bbid) . programBBMap . program
     for (bbInsts bb) evaluateInst
     nextid <- followRetInst (bbRetInst bb)
     modify (\evaluator -> evaluator {prevbbid=Just bbid})
@@ -110,5 +111,5 @@ evaluateBB bbid = do
 -- | TODO: convert to Either Error (Maybe Int)
 -- | The internal monad transformer would need to become EitherT
 runProgram :: IRProgram -> Maybe Int
-runProgram program = returnval $ execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)
+runProgram program = returnval $ execState (evaluateBB (programEntryBBId program)) (initEvaluator program)
 \end{code}

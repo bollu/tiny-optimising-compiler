@@ -15,17 +15,16 @@ import qualified Language as L
 import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
 import Data.Functor.Identity
-import Data.Traversable
-import Data.Functor.Identity
-import qualified Data.Monoid as M
+import BaseIR
 
-data SSA
-data NotSSA
 
--- | A label that uses the phantom @a as a type based discriminator
-data Label a = Label { unLabel ::  String } deriving(Eq, Ord, Functor, Foldable, Traversable)
-instance Pretty (Label a) where
-  pretty (Label s) = pretty s
+type IRBB = BasicBlock (Named Inst) RetInst
+type IRBBId = BBId (Named Inst) (RetInst)
+
+-- | Default basic block.
+defaultIRBB :: IRBB
+defaultIRBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
+
 
 -- a Value, which can either be a constant, or a reference to an instruction.
 data Value = ValueConstInt Int | ValueInstRef (Label Inst) deriving(Eq)
@@ -35,14 +34,14 @@ instance Pretty Value where
   pretty (ValueInstRef name) = pretty "%" <> pretty name
 
 -- | Instructions that we allow within a basic block.
-data Inst = InstAlloc 
+data Inst = InstAlloc
   | InstAdd Value Value
   | InstMul Value Value
   | InstL Value Value
   | InstAnd Value Value
-  | InstLoad Value 
+  | InstLoad Value
   | InstStore Value Value
-  | InstPhi (NE.NonEmpty (BBId, Value)) deriving(Eq)
+  | InstPhi (NE.NonEmpty (IRBBId, Value)) deriving(Eq)
 
 
 -- | Map over the `Value`s in an Inst
@@ -75,45 +74,11 @@ instance Pretty Inst where
     pretty "Phi: " <+> hcat (punctuate comma (NE.toList (fmap (\(bbid, val) ->
                                 brackets (pretty bbid <+> pretty val)) philist)))
 
--- | Represents @a that is optionally named by a @Label a
-data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable, Eq)
-
-
--- | Infix operator for @Named constructor
-(=:=) :: Label a  -> a -> Named a
-name =:= a = Named name a
-
-
-instance Pretty a => Pretty (Named a) where
-  pretty (Named name data') = pretty name <+> pretty ":=" <+> pretty data'
-
--- | Used to identify basic blocks
-type BBId = Label BasicBlock
-
-
--- | A basic block. Single-entry, multiple-exit.
-data BasicBlock = BasicBlock {
-  bbInsts :: [Named Inst],
-  bbRetInst :: RetInst ,
-  bbLabel :: Label BasicBlock
-} deriving(Eq)
-
--- | Default basic block.
-defaultBB :: BasicBlock
-defaultBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
-
--- TODO: replace nest with indent
-instance Pretty BasicBlock where
-  pretty (BasicBlock insts ret label) =
-    nest 4 (vsep ([pretty label <> pretty ":"] ++ body)) where
-      body = map pretty insts ++ [pretty ret]
-
-
 -- | Return instructions are the only ones that can cause control flow
 -- | between one basic block to another.
 data RetInst =
-  RetInstConditionalBranch Value BBId BBId |
-  RetInstBranch BBId |
+  RetInstConditionalBranch Value IRBBId IRBBId |
+  RetInstBranch IRBBId |
   RetInstTerminal |
   RetInstRet Value deriving(Eq)
 
@@ -137,71 +102,28 @@ forRetInstValue f (RetInstRet v) = RetInstRet <$> f v
 mapRetInstValue :: (Value -> Value) -> RetInst -> RetInst
 mapRetInstValue f ret = runIdentity $ forRetInstValue (Identity . f) ret
 
-data IRProgram = IRProgram {
-  irProgramBBMap :: M.OrderedMap BBId BasicBlock,
-  irProgramEntryBBId :: BBId
-} deriving(Eq)
 
--- | Map an effect over all the BBs of the IRProgram
-traverseIRProgramBBs :: Applicative f => (BasicBlock -> f BasicBlock) -> IRProgram -> f IRProgram
-traverseIRProgramBBs fbb (IRProgram bbmap entrybbid) = 
-    (IRProgram <$> bbmap' <*> pure entrybbid) where
-        bbmap' = traverse fbb bbmap
+-- | Represents @a that is optionally named by a @Label a
+data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable, Eq)
 
--- | Map a pure effect over all BBs of the IRPRogram
-mapIRProgramBBs :: (BasicBlock -> BasicBlock) -> IRProgram -> IRProgram
-mapIRProgramBBs fbb program = runIdentity $ traverseIRProgramBBs (Identity . fbb) program
-
--- | Collect results from basic blocks which can be monoidally smashed
-foldMapIRProgramBBs :: Monoid m => (BasicBlock -> m) -> IRProgram -> m
-foldMapIRProgramBBs fbb program = foldMap fbb (irProgramBBMap program)
+hasName :: (Label a) -> Named a -> Bool
+hasName lbl named = namedName named == lbl
 
 
--- | Remove an instruction from a basic block
-removeInstFromBB :: Label Inst -> BasicBlock -> BasicBlock
-removeInstFromBB toremovename (BasicBlock insts retinst lbl) =
-        BasicBlock insts' retinst lbl 
-    where insts' = filter ((/= toremovename) . namedName) insts
+-- | Infix operator for @Named constructor
+(=:=) :: Label a  -> a -> Named a
+name =:= a = Named name a
 
--- | Run an effect on a basic block.
-traverseBB :: Applicative f => (Named Inst -> f (Named Inst)) 
-         -> (RetInst -> f (RetInst))
-         -> BasicBlock
-         -> f BasicBlock
-traverseBB finst fretinst (BasicBlock insts retinst lbl) =
-    BasicBlock <$> insts' <*> retinst' <*> pure lbl where
-        retinst' = fretinst retinst
-        insts' = for insts finst
-
--- | Fold from the first instruction to the last one, and then on the
--- | RetInst of a BB.
-foldlBB :: collect -> 
-           (collect -> Named Inst -> collect) -> 
-           (collect -> RetInst -> collect) -> 
-           BasicBlock -> collect
-foldlBB seed finst fretinst (BasicBlock insts retinst lbl) = 
-    fretinst (foldl finst seed insts) retinst
+instance Pretty a => Pretty (Named a) where
+  pretty (Named name data') = pretty name <+> pretty ":=" <+> pretty data'
 
 
--- | produce results on a BB and smash them together with  a monoid instance
-foldMapBB :: Monoid m => (Named Inst -> m) 
-    -> (RetInst -> m) 
-    -> BasicBlock 
-    ->  m
-foldMapBB finst fretinst bb = 
-    foldlBB mempty (\c i -> c M.<>  finst i) (\c ri -> c M.<> fretinst ri) bb
-
-
--- | Map over the instructions and return values of a basic block
-mapBB :: (Named Inst -> Named Inst)
-             -> (RetInst -> RetInst) -> BasicBlock -> BasicBlock
-mapBB finst fretinst bb = 
-    runIdentity $ traverseBB (Identity . finst) (Identity . fretinst) bb
+type IRProgram = Program (Named Inst) RetInst
 
 -- | Replace all uses of an instruction in a program
 replaceUsesOfInst :: Label Inst -> Value -> IRProgram -> IRProgram
-replaceUsesOfInst instlbl newval program = 
-    mapIRProgramBBs fbb program  where
+replaceUsesOfInst instlbl newval program =
+    mapProgramBBs fbb program  where
         replaceVal :: Value -> Value
         replaceVal (ValueInstRef ((== instlbl) -> True)) = newval
         replaceVal v = v
@@ -212,11 +134,8 @@ replaceUsesOfInst instlbl newval program =
         fretinst :: RetInst -> RetInst
         fretinst = mapRetInstValue replaceVal
 
-        fbb :: BasicBlock -> BasicBlock
+        fbb :: IRBB -> IRBB
         fbb = mapBB finst fretinst
 
 
-instance Pretty IRProgram where
-  pretty (IRProgram bbmap entryId) = vsep $ [pretty "entry: " <+> pretty entryId, pretty "program: "] ++
-                                            fmap pretty (M.elems bbmap)
 \end{code}

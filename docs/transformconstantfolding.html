@@ -1,0 +1,148 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<h1>
+Transform Pass: Constant Folding
+</h1>
+<ul>
+<li><a href="https://llvm.org/docs/Passes.html#constprop-simple-constant-propagation">Equivalent LLVM pass</a></li>
+</ul>
+<h2>
+Introduction
+</h2>
+<p>In this pass, we remove all instructions we can evaluate at compile-time. This includes arithmetic and boolean operators.</p>
+<p>The idea is really simple: scan basic blocks, and if an instruction can be immediately evaluated, do so.</p>
+<p>Note that for this pass to be as easy as it is, <strong>SSA is crucial</strong>.</p>
+<p>Consider this snippet of code:</p>
+<pre><code>define x;
+assign x := 10;
+assign x := x + 42;
+assign x := x * 10
+return x;</code></pre>
+<p>and the associated <code>load/store</code> based IR:</p>
+<pre><code>entry:  default.0
+program:
+default.0:
+    x := alloc
+    _ := store 10# in %x
+    x.load := load %x
+    tmp.0 := add %x.load 42#
+    _.1 := store %tmp.0 in %x
+    x.load.1 := load %x
+    tmp.1 := mul %x.load.1 10#
+    _.2 := store %tmp.1 in %x
+    TERMINAL</code></pre>
+<p>We cannot simply replace <code>x</code> with <code>10</code> due to the mutation happening on x!</p>
+<p>Now, consider the SSA form of the same computation:</p>
+<pre><code>entry:  default.0
+program:
+default.0:
+    tmp.0 := add 10# 42#
+    tmp.1 := mul %tmp.0 10#
+    TERMINAL</code></pre>
+<p>Due to the <em>immutable</em> nature of SSA, we are guaranteed that we can replace all occurences of a variable with it's RHS, and the semantics of the program will remain the same! (AKA <a href="https://wiki.haskell.org/Equational_reasoning_examples">equational reasoning</a>).</p>
+<p>This is enormously powerful because it allows to replace values with wild abandon <code>:)</code>.</p>
+<h2>
+Key Takeaway of this pass
+</h2>
+<ul>
+<li>SSA, due to immutability enables equational reasoning.</li>
+<li>This allows us to perform transformations such as constant folding very easily.</li>
+</ul>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE ViewPatterns #-}</span>
+
+<span class="kw">module</span> <span class="dt">TransformConstantFolding</span> <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+
+<span class="co">-- | Fold all possible arithmetic / boolean ops</span>
+<span class="ot">tryFoldInst ::</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Value</span>
+tryFoldInst (<span class="dt">InstAdd</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
+    <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> (i <span class="fu">+</span> j)
+tryFoldInst (<span class="dt">InstMul</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
+    <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> (i <span class="fu">*</span> j)
+tryFoldInst (<span class="dt">InstL</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
+    <span class="dt">Just</span> <span class="fu">$</span> <span class="kw">if</span> i <span class="fu">&lt;</span> j <span class="kw">then</span> <span class="dt">ValueConstInt</span> <span class="dv">0</span> <span class="kw">else</span> <span class="dt">ValueConstInt</span> <span class="dv">1</span>
+tryFoldInst (<span class="dt">InstAnd</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
+    <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> (i <span class="fu">*</span> j)
+tryFoldInst i <span class="fu">=</span> <span class="dt">Nothing</span>
+
+<span class="ot">collectFoldableInsts ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> [(<span class="dt">Label</span> <span class="dt">Inst</span>, <span class="dt">Value</span>)]
+collectFoldableInsts (<span class="dt">Named</span> name (tryFoldInst <span class="ot">-&gt;</span> <span class="dt">Just</span> v)) <span class="fu">=</span> [(name, v)]
+collectFoldableInsts _ <span class="fu">=</span> []
+
+<span class="ot">runTillStable ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+runTillStable f a <span class="fu">=</span> <span class="kw">let</span> a&#39; <span class="fu">=</span> f a <span class="kw">in</span>
+    <span class="kw">if</span> a&#39; <span class="fu">==</span> a
+    <span class="kw">then</span> a&#39;
+    <span class="kw">else</span> f a&#39;
+
+<span class="ot">transformConstantFold ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+transformConstantFold <span class="fu">=</span> runTillStable (dceProgram <span class="fu">.</span> foldProgram)  <span class="kw">where</span>
+
+    <span class="co">-- | Collection of instruction names and values</span>
+<span class="ot">    foldableInsts ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> [(<span class="dt">Label</span> <span class="dt">Inst</span>, <span class="dt">Value</span>)]
+    foldableInsts p <span class="fu">=</span> foldMapIRProgramBBs (foldMapBB (collectFoldableInsts) (const mempty)) p
+
+    <span class="co">-- | Program after constant folding</span>
+<span class="ot">    foldProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+    foldProgram program <span class="fu">=</span> foldl (\p (name, v) <span class="ot">-&gt;</span> replaceUsesOfInst name v p) program (foldableInsts program)
+
+    <span class="co">-- | program after dead code elimination</span>
+<span class="ot">    dceProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+    dceProgram program <span class="fu">=</span> 
+        foldl (\p name <span class="ot">-&gt;</span> mapIRProgramBBs (removeInstFromBB name) p) program (map fst (foldableInsts program))</code></pre></div>
+</body>
+</html>

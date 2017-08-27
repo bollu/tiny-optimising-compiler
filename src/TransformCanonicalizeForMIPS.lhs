@@ -34,6 +34,7 @@ import Data.Foldable
 import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import IR
+import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 
@@ -53,7 +54,7 @@ tryRearrangeInst i = i
 
 
 transformCanonicalizeForMIPS :: IRProgram -> IRProgram
-transformCanonicalizeForMIPS = mapIRProgramBBs (mapBB id id)
+transformCanonicalizeForMIPS = mapProgramBBs (mapBB id id)
 
 \end{code}
 
