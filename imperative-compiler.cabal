@@ -64,7 +64,7 @@ executable imperative-compiler
                  RegisterAllocation,
                  Language,
                  TransformConstantFolding,
-                 TransformCanonicalizeForMIPS
+                 TransformIRToMIPS
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -118,7 +118,7 @@ test-suite test
                        , PrettyUtils
                        , ProgramToIR
                        , TransformMem2Reg
-                       , TransformCanonicalizeForMIPS
+                       , TransformIRToMIPS
                        , Graph
                        , TransformConstantFolding
   default-language:    Haskell2010

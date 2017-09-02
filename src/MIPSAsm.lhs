@@ -4,7 +4,7 @@
 module MIPSAsm(MReg(..),
 MRegLabel,
 MBBLabel,
-MBasicBlock(..)) where
+MBB) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -27,7 +27,7 @@ instance Pretty MReg where
 
 -- | Similar to IRProgram, a machine program is a list of basic blocks.
 -- | We make it a list so it's easier to handle.
-data MProgram = MProgram [MBasicBlock]
+data MProgram = MProgram [MBB]
 
 instance Pretty MProgram where
     pretty (MProgram bbs) = vsep $ fmap pretty bbs
@@ -62,9 +62,12 @@ instance Pretty MTerminatorInst where
     pretty (Mexit) = pretty "<exit>"
     pretty (Mbeqz dest lbl) = pretty "beqz" <+> pretty dest <+> pretty lbl
 
-type MBBLabel = Label MBasicBlock
-type MBasicBlock = BasicBlock MInst MTerminatorInst
+type MBBLabel = Label MBB
+type MBB = BasicBlock MInst MTerminatorInst
 type MProrgram = Program MInst MTerminatorInst
+
+
+type MLiveRangeBB =  BasicBlock (Int, MInst) (Int, MTerminatorInst)
     
 {-
 -- This module assumes that constants in all parameters are canonicalized

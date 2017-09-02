@@ -10,7 +10,7 @@ import System.IO
 import System.Environment
 import TransformMem2Reg
 import TransformConstantFolding
-import TransformCanonicalizeForMIPS
+import TransformIRToMIPS
 import PrettyUtils
 import qualified OrderedMap as M
 import qualified MIPSAsm as MIPS
