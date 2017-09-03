@@ -59,6 +59,7 @@ executable imperative-compiler
                  PrettyUtils,
                  OrderedMap,
                  IRInterpreter,
+                 MIPSInterpreter,
                  MIPSAsm,
                  Graph,
                  RegisterAllocation,
@@ -77,6 +78,10 @@ executable imperative-compiler
                        ansi-wl-pprint,
                        bytestring,
                        prettyprinter,
+                       -- To create temporary files.
+                       temporary,
+                       -- To launch SPIM.
+                       process,
                        text,
                        containers,
                        mtl,
@@ -112,6 +117,7 @@ test-suite test
   other-modules:         IR
                        , BaseIR
                        , IRInterpreter
+                       , MIPSInterpreter
                        , Language
                        , OrderedMap
                        , Parser

@@ -4,7 +4,14 @@
 module MIPSAsm(MReg(..),
 MRegLabel,
 MBBLabel,
-MBB) where
+MBB,
+MProgram,
+MInst(..),
+MTerminatorInst(..),
+regZero,
+rega0,
+regv0,
+printMIPSAsm) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -20,19 +27,25 @@ type MRegLabel = Label MReg
 
 -- A register for our machine instructions.
 data MReg = MRegVirtual MRegLabel | MRegReal String
+
+regZero :: MReg
+regZero = MRegReal "zero"
+
+rega0 :: MReg
+rega0 = MRegReal "a0"
+
+regv0 :: MReg
+regv0 = MRegReal "v0"
+
+
 instance Pretty MReg where
     pretty (MRegReal name) = pretty "$" PP.<> pretty name
     pretty (MRegVirtual i) = pretty "$virt" PP.<> pretty i
 
 
--- | Similar to IRProgram, a machine program is a list of basic blocks.
--- | We make it a list so it's easier to handle.
-data MProgram = MProgram [MBB]
-
-instance Pretty MProgram where
-    pretty (MProgram bbs) = vsep $ fmap pretty bbs
-
 data MInst where
+    Mli :: MReg -> Int -> MInst
+    Mmflo :: MReg -> MInst
     Madd :: MReg -> MReg -> MReg -> MInst
     Maddi :: MReg -> MReg -> Int -> MInst
     Mori :: MReg -> MReg -> Int -> MInst
@@ -46,29 +59,36 @@ _prettyMBinOp :: (Pretty a, Pretty b, Pretty c) =>
     String -> a -> b -> c -> PP.Doc doc
 _prettyMBinOp name a b c = pretty name <+> pretty a <+> pretty b <+> pretty c
 instance Pretty MInst where
+    pretty (Mli dest val) = pretty "li" <+> pretty dest <+> pretty val
+    pretty (Mmflo dest) = pretty "mflo" <+> pretty dest
     pretty (Madd dest a b) = _prettyMBinOp "add" dest a b
     pretty (Maddi dest a b) = _prettyMBinOp "addi" dest a b
     pretty (Mori dest a b) = _prettyMBinOp "ori" dest a b
     pretty (Mslt dest a b) = _prettyMBinOp "slt" dest a b
-    pretty (Mslt dest a b) = _prettyMBinOp "slt" dest a b
-    pretty (Mslti dest a b) = _prettyMBinOp "slt" dest a b
-    pretty (Mmult a b) = pretty "mul" <+> pretty a <+> pretty b
+    pretty (Mslti dest a b) = _prettyMBinOp "slti" dest a b
+    pretty (Mmult a b) = pretty"mult" <+> pretty a <+> pretty b
+    pretty (Msyscall) = pretty "syscall"
 
 data MTerminatorInst =
     Mexit | 
     Mbeqz MReg  MBBLabel
 
 instance Pretty MTerminatorInst where
-    pretty (Mexit) = pretty "<exit>"
+    pretty (Mexit) = pretty "# <exit>"
     pretty (Mbeqz dest lbl) = pretty "beqz" <+> pretty dest <+> pretty lbl
 
 type MBBLabel = Label MBB
 type MBB = BasicBlock MInst MTerminatorInst
-type MProrgram = Program MInst MTerminatorInst
+type MProgram = Program MInst MTerminatorInst
 
 
 type MLiveRangeBB =  BasicBlock (Int, MInst) (Int, MTerminatorInst)
-    
+  
+-- | Print a MIPS program into a Doc. Use this to write it into a file.
+-- | **Do not use pretty**, because it prints the entry BB as well.
+printMIPSAsm :: MProgram -> Doc ()
+printMIPSAsm Program{programBBMap=bbmap} = vsep $ fmap pretty (M.elems bbmap)
+
 {-
 -- This module assumes that constants in all parameters are canonicalized
 -- to be the second parameter.

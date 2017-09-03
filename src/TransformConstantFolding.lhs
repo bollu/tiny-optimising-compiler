@@ -109,7 +109,7 @@ runTillStable f a = let a' = f a in
     else f a'
 
 transformConstantFold :: IRProgram -> IRProgram
-transformConstantFold = runTillStable (foldProgram)  where
+transformConstantFold = runTillStable (dceProgram . foldProgram)  where
 
     -- | Collection of instruction names and values
     foldableInsts :: IRProgram -> [(Label Inst, Value)]

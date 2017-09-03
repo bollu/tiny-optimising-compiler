@@ -102,6 +102,17 @@ forRetInstValue f (RetInstRet v) = RetInstRet <$> f v
 mapRetInstValue :: (Value -> Value) -> RetInst -> RetInst
 mapRetInstValue f ret = runIdentity $ forRetInstValue (Identity . f) ret
 
+-- | Run an effect `f` over the basic block IDs of the return instruction
+forRetInstBBId :: Applicative m => (IRBBId -> m IRBBId) -> RetInst -> m RetInst
+forRetInstBBId _ RetInstTerminal = pure RetInstTerminal
+forRetInstBBId f (RetInstBranch bbid) =  (RetInstBranch <$> f bbid)
+forRetInstBBId f (RetInstConditionalBranch v t e) =
+    RetInstConditionalBranch <$> pure v <*> f t <*> f e
+forRetInstBBId _ (RetInstRet v) = pure (RetInstRet v)
+
+mapRetInstBBId :: (IRBBId -> IRBBId) -> RetInst -> RetInst
+mapRetInstBBId f ret = runIdentity $ forRetInstBBId (Identity . f) ret
+
 
 -- | Represents @a that is optionally named by a @Label a
 data Named a = Named { namedName :: Label a, namedData :: a } deriving(Functor, Foldable, Traversable, Eq)

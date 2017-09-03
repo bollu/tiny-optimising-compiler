@@ -30,6 +30,8 @@ unsafeTransmuteLabel :: Label a -> Label b
 unsafeTransmuteLabel (Label lbl) = Label lbl
 
 -- | A basic block. Single-entry, multiple-exit.
+-- | TODO: remove duplication of information about the bbLabel in both
+-- | Program and BasicBlock.
 data BasicBlock inst ret = BasicBlock {
   bbInsts :: [inst],
   bbRetInst :: ret ,

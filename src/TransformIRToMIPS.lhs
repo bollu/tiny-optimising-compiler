@@ -37,24 +37,128 @@ import IR
 import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
+import MIPSAsm
 
-tryRearrangeVals :: (Value, Value) -> (Value, Value)
-tryRearrangeVals(v@(ValueConstInt _), w@(ValueConstInt _)) =
-    error . docToString $ pretty "this pass assumes that constant folding has already been run."
-tryRearrangeVals (v, w@(ValueConstInt _)) = (w, v)
-tryRearrangeVals (v, w) = (v, w)
+-- | Convert a label of an instruction to a virtual register.
+lblToReg :: Label Inst -> MReg
+lblToReg lbl = MRegVirtual (unsafeTransmuteLabel lbl)
 
--- | Try to rearrange the instruction parameters
-tryRearrangeInst :: Inst -> Inst
-tryRearrangeInst (InstAdd v w) = uncurry InstAdd (tryRearrangeVals (v, w))
-tryRearrangeInst (InstMul v w) = uncurry InstMul (tryRearrangeVals (v, w))
-tryRearrangeInst (InstL v w) = uncurry InstL (tryRearrangeVals (v, w))
-tryRearrangeInst (InstAnd v w) = uncurry InstAnd (tryRearrangeVals (v, w))
-tryRearrangeInst i = i
+-- | Create a MachineInst for those IR instructions which have two equivalent
+-- | MachineInsts:
+-- | One that can take an immediate mode `Int` value, and another that takes
+-- | two registers
+mkMInstForBinOpFromVariants :: 
+    Label Inst -- ^ Destination name
+    -> Value -- ^ 1st binary operand `a'
+    -> Value -- ^ 2nd binary operand
+    -> (MReg -> MReg -> MReg -> MInst) -- ^ Constructor for the instruction
+                                       -- that uses two registers as operands.
+    -> (MReg -> MReg -> Int -> MInst) -- ^ Constructor for the instruction that 
+                                      -- uses a register and an immediate value.
+    -> MInst
+mkMInstForBinOpFromVariants dstlbl (ValueConstInt i) (ValueInstRef v) _ cimm = 
+    cimm (lblToReg dstlbl) (lblToReg v) i
+
+mkMInstForBinOpFromVariants dstlbl (ValueInstRef v) (ValueConstInt i) _ cimm = 
+    cimm (lblToReg dstlbl) (lblToReg v) i 
+
+mkMInstForBinOpFromVariants dstlbl (ValueInstRef v) (ValueInstRef v') creg _ = 
+    creg (lblToReg dstlbl) (lblToReg v) (lblToReg v')
+
+mkMInstForBinOpFromVariants dstlbl (ValueConstInt i) (ValueConstInt i') creg _= 
+    error . docToString $ vcat  
+        [pretty "expected instruction to be constant folded",
+         pretty "Found illegal operands:",
+         pretty dstlbl <+> pretty ":= f(" <+> 
+         pretty i <+> pretty "," <+> pretty i <+> pretty ")"]
+
+-- | Context for instruction transformation
+data Context = Context {
+    -- | Count of number of virtual registers created thus far.
+    ctxNVirtualRegs :: Int
+}
+-- | Transform an `Inst` to a sequence of `MInst`
+transformInst :: Named Inst -> [MInst] 
+transformInst (Named dest (InstAdd a b)) =
+    [mkMInstForBinOpFromVariants dest a b Madd Maddi]
+
+-- | Note that for now, we assume that multiplication never happens between 
+-- | constants.
+transformInst (Named dest (InstMul (ValueInstRef a) (ValueInstRef b))) =
+    [Mmult (lblToReg a) (lblToReg b), Mmflo (lblToReg dest)]
+transformInst inst =
+    error . docToString $ pretty "unimplemented lowering for Inst: " <+>
+        pretty inst
 
 
-transformCanonicalizeForMIPS :: IRProgram -> IRProgram
-transformCanonicalizeForMIPS = mapProgramBBs (mapBB id id)
+-- | Make a MInst that sets a MReg (which _must_ be a real register) to a value.
+mkMInstSetRealRegToValue :: MReg -> Value -> MInst
+mkMInstSetRealRegToValue (MRegReal name) (ValueConstInt i) = 
+    Mli (MRegReal name) i
+mkMInstSetRealRegToValue (MRegReal name) (ValueInstRef lbl) = 
+    Madd (MRegReal name) regZero (lblToReg lbl)
 
+-- | Code needed in $v0 to issue "print integer".
+codePrintInt :: Int
+codePrintInt = 1
+
+-- | Code needed in $v0 to issue exit.
+codeExit :: Int
+codeExit = 10
+
+-- | Transform a `RetInst` into possible `MInsts` and a terminator inst.
+transformRetInst :: RetInst -> ([MInst], MTerminatorInst)
+transformRetInst (RetInstRet v) = 
+    ([mkMInstSetRealRegToValue rega0 v,
+      Mli regv0 codePrintInt,
+      Msyscall,
+      Mli regv0 codeExit,
+      Msyscall],
+      Mexit)
+transformRetInst retinst = 
+    error . docToString $ pretty "unimplemented lowering for RetInst: " <+>
+        pretty retinst
+
+-- | Transform an IR basic block to a machine Basic Block
+transformBB :: IRBB -> MBB
+transformBB (BasicBlock {
+        bbInsts=insts,
+        bbRetInst=retinst,
+        bbLabel=label
+    }) = BasicBlock {
+        bbLabel=unsafeTransmuteLabel label,
+        bbInsts=insts' ++ instsFromRet,
+        bbRetInst=mRetInst
+    } where
+        insts' = insts >>= transformInst
+        (instsFromRet, mRetInst) = transformRetInst retinst
+
+-- Rename the entry BB to "main"
+renameEntryBlockToMain :: IRProgram -> IRProgram
+renameEntryBlockToMain p@Program {
+  programBBMap=bbmap,
+  programEntryBBId=entrybbid
+} = mapProgramBBs (mapBB id (mapRetInstBBId setEntryToMain)) p' where
+    entryBB :: IRBB
+    entryBB = (bbmap M.! entrybbid) {
+        bbLabel=Label "main"
+    }
+
+    -- | bbmap with entry block changed to "main"
+    bbmap' = M.insert (Label "main") entryBB 
+                    (M.delete entrybbid bbmap)
+
+    -- | IRProgram with the entry block edited to be "main"
+    p' :: IRProgram
+    p' = Program {
+        programEntryBBId=Label "main",
+        programBBMap = bbmap'
+    }
+    -- | Rewrite the "entry" BBId to "main".
+    setEntryToMain :: IRBBId -> IRBBId
+    setEntryToMain lbl = if lbl == entrybbid then Label "main" else lbl
+
+transformIRToMIPS :: IRProgram -> MProgram
+transformIRToMIPS irprogram = mapProgramBBs transformBB (renameEntryBlockToMain irprogram)
 \end{code}
 

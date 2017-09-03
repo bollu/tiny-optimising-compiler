@@ -12,6 +12,7 @@ import TransformMem2Reg
 import TransformConstantFolding
 import TransformIRToMIPS
 import PrettyUtils
+import MIPSInterpreter
 import qualified OrderedMap as M
 import qualified MIPSAsm as MIPS
 
@@ -22,8 +23,7 @@ compileProgram p = undefined
 pipeline :: [(String, IR.IRProgram -> IR.IRProgram)]
 pipeline = [("original", id),
             ("mem2reg", transformMem2Reg),
-            ("constant fold", transformConstantFold),
-            ("Canonicalization for MIPS", transformCanonicalizeForMIPS)]
+            ("constant fold", transformConstantFold)]
 
 runPasses :: [(String, IR.IRProgram -> IR.IRProgram)] -- ^ Pass pipeline
     -> IR.IRProgram -- ^ Current program 
@@ -38,6 +38,7 @@ runPasses ((name, pass):passes) p = do
     runPasses passes p'
 
 
+
 main :: IO ()
 main = do
      args <- getArgs
@@ -48,9 +49,17 @@ main = do
             putStrLn "*** Program:"
             putStrLn . prettyableToString $  program
 
-            let irprogram =  programToIR program
+            let irprogram = programToIR program
             finalProgram <- runPasses pipeline irprogram
 
             putStrLn "*** MIPS assembly *** "
+            let mipsasm = transformIRToMIPS finalProgram
+            putStrLn . docToString . MIPS.printMIPSAsm $ mipsasm
             -- putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram
-\end{code}
+
+            putStrLn "*** Output from SPIM *** "
+            mProgramOutput <- interpretMIPSWithSPIM mipsasm
+            case mProgramOutput of
+                Left err -> putStrLn . docToString $ err
+                Right val -> putStrLn . docToString $ (pretty "final value: " <+> val)
+\end{code}  
