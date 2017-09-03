@@ -18,7 +18,7 @@ structures into SSA form. However, the core algorithm remains the same.
 {-# LANGUAGE ScopedTypeVariables #-}
 module TransformMem2Reg(constructDominatorTree,
     CFG(..),
-    mkBBGraph,
+    mkCFG,
     constructBBDominators,
     getAllChildren,
     getDominanceFrontier,
@@ -50,8 +50,8 @@ getBBSuccessors (BasicBlock { bbRetInst = RetInstRet _}) = []
 getBBSuccessors (BasicBlock { bbRetInst = RetInstBranch next}) = [next]
 getBBSuccessors (BasicBlock { bbRetInst = RetInstConditionalBranch _ l r}) = [l, r]
 
-mkBBGraph :: M.OrderedMap IRBBId IRBB -> CFG
-mkBBGraph bbMap = Graph (M.foldMapWithKey makeEdges bbMap)  where
+mkCFG :: M.OrderedMap IRBBId IRBB -> CFG
+mkCFG bbMap = Graph (M.foldMapWithKey makeEdges bbMap)  where
 
     -- Make the edges corresponding to basic block.
     makeEdges :: IRBBId -> IRBB -> [(IRBBId, IRBBId)]
@@ -133,7 +133,7 @@ constructBBDominators program = getFirstAdjacentEqual iterations where
 
     -- graph structure
     cfg :: CFG
-    cfg =  mkBBGraph (programBBMap program)
+    cfg =  mkCFG (programBBMap program)
 
     -- seed constructBBDominators
     initdominfo :: BBIdToDomSet
@@ -589,7 +589,7 @@ transformMem2Reg program@Program{programBBMap=bbmap,
                            programEntryBBId=entrybbid} =
     (Program {programBBMap=bbmapReg, programEntryBBId=entrybbid}) where
       cfg :: CFG
-      cfg =  mkBBGraph bbmap
+      cfg =  mkCFG bbmap
 
       bbIdToDomSet :: BBIdToDomSet
       bbIdToDomSet = constructBBDominators program

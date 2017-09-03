@@ -7,5 +7,5 @@ if x < 1 {
     assign y := 3;
 };
 
-assign x := 2 * y;
+assign x := 2 + y;
 return x;

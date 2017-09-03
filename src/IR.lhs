@@ -13,13 +13,16 @@ source code to.
 
 module IR where
 import Data.Text.Prettyprint.Doc as PP
+import PrettyUtils
 import qualified Language as L
 import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
 import Data.Functor.Identity
+import qualified Data.Monoid as Monoid
 import BaseIR
 import Data.Traversable(for)
 import Control.Applicative(liftA2)
+import Control.Monad.State.Strict(State, execState, modify)
 
 type IRBB = BasicBlock (Named Inst) RetInst
 type IRBBId = BBId (Named Inst) (RetInst)
@@ -27,6 +30,13 @@ type IRBBId = BBId (Named Inst) (RetInst)
 -- | Default basic block.
 defaultIRBB :: IRBB
 defaultIRBB = BasicBlock [] (RetInstTerminal) (Label "undefined")
+
+-- | Given an IRBB, return a list of Phi nodes.
+getIRBBPhis :: IRBB -> [Named Inst]
+getIRBBPhis bb = bbInsts $
+  filterBBInsts (\(Named _ i) -> case i of
+                                InstPhi _ -> True
+                                _ -> False) bb
 
 
 -- a Value, which can either be a constant, or a reference to an instruction.
@@ -46,7 +56,22 @@ data Inst = InstAlloc
   | InstStore Value Value
   | InstPhi (NE.NonEmpty (IRBBId, Value)) deriving(Eq)
 
-
+-- | Given `Inst` (which is known to be a Phi node), get a `Value` which
+-- | corresponds to the given `IRBBId`
+getPhiValueForBB :: IRBBId -> Inst -> Maybe Value
+getPhiValueForBB bbid phi@(InstPhi valList) = 
+  case NE.filter ((==bbid) . fst) valList of
+    [] -> Nothing
+    [(_, v)] -> Just v
+    xs -> error . docToString $ vcat $ 
+        [pretty "Phi node should at most one copy of a predecessor BB, found:",
+        pretty xs,
+        pretty "Phi node:",
+        pretty phi]
+getPhiValueForBB _ inst =
+  error . docToString $ vcat 
+    [pretty "getPhiValueForBB should only be called on Phi. Found:",
+     pretty inst]
 -- | Map over the `Value`s in an Inst
 mapInstValue :: (Value -> Value) -> Inst -> Inst
 mapInstValue f inst = runIdentity $ forInstValue (Identity . f) inst
@@ -66,6 +91,17 @@ forInstValue f (InstPhi valList) = InstPhi <$> for valList (f' f) where
       -> (IRBBId, Value)
       -> m (IRBBId, Value)
   f' f (irbbid, val) = liftA2 (,) (pure irbbid) (f val)
+
+-- | Collect a monoidal Value over an Inst
+foldMapInstValue :: Monoid m => (Value -> m) -> Inst -> m
+foldMapInstValue f inst = execState final Monoid.mempty where
+  -- go :: Value -> State m Value
+  go v = do 
+          modify (\m -> m Monoid.<> f v)
+          return v
+
+  -- final :: State m Inst
+  final = (forInstValue go inst)
 
 instance Pretty Inst where
   pretty (InstAlloc) = pretty "alloc"

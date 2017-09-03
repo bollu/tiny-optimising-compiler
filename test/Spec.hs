@@ -55,10 +55,10 @@ mkAllPassesTests filepath contents =
 
 -- | Make a test case that checks that MIPS output is the same as the
 -- | interpreter output.
-mkMIPSCodegenTest :: String -> TestTree
-mkMIPSCodegenTest contents =
+mkMIPSCodegenTest :: FilePath -> String -> TestTree
+mkMIPSCodegenTest filepath contents =
     -- | use testCaseSteps so we can print errors on parsing and reference program evaluation.
-    testCaseSteps ("MIPS code execution in SPIM") $ \step ->  do
+    testCaseSteps (filepath) $ \step ->  do
       parseSourceToIR step contents $ \seedir -> do
            v <- runReferenceProgram step seedir
            let mipsIR = (transformIRToMIPS . 
@@ -75,11 +75,11 @@ main :: IO ()
 main = do
   filepathsWithContents <- resources
   let passesTests = fmap (uncurry mkAllPassesTests) filepathsWithContents
-  let mipsTests = fmap (mkMIPSCodegenTest . snd) filepathsWithContents
+  let mipsTests = fmap (uncurry mkMIPSCodegenTest) filepathsWithContents
 
   defaultMain $ testGroup "All tests"
     [testGroup "All passes on all files" passesTests,
-     testGroup "MIPS codegen & execution" mipsTests]
+     testGroup "MIPS codegen & execution in SPIM" mipsTests]
 
 --  | An IR pass
 type Pass = (String, IRProgram -> IRProgram)
