@@ -466,11 +466,12 @@ variableRenameInst namedinst@(Named name inst) = do
           return []
 
         -- | For a phi node, all predecessors should map to phi node name.
+        -- | We have already rewritten the values incoming to the phi node,
+        -- | So all we need to do is fix preds.
         InstPhi namebbpairs -> do
-            phi' <- forM namedinst variableRenameInstRHS
             for namebbpairs (\(prevname, prevbbid) ->
                                 modify (\ctx -> (ctx {ctxVarToLatestStoreVal=M.insert name  (ValueInstRef name) (ctxVarToLatestStoreVal ctx)})))
-            return [phi']
+            return [namedinst]
 
 
 
