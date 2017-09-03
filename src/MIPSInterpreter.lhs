@@ -9,11 +9,11 @@ import System.Exit(ExitCode(..))
 import MIPSAsm
 import Text.Read(readMaybe)
 import PrettyUtils
+import Safe(lastMay)
 type ErrorDoc = Doc ()
-type SuccessDoc = Doc ()
 
 -- | Allow for interpreters that try to access state.
-interpretMIPSWithSPIM :: MProgram -> IO (Either ErrorDoc SuccessDoc)
+interpretMIPSWithSPIM :: MProgram -> IO (Either ErrorDoc Int)
 interpretMIPSWithSPIM p = 
     withSystemTempFile "mipsfile" (\filepath handle -> do
         _writeMIPSIntoFile p handle
@@ -28,7 +28,7 @@ _writeMIPSIntoFile program handle = do
 
 
 -- | Run MIPS code through SPIM with the file.
-_runMIPSFromFileWithSPIM :: FilePath -> IO (Either ErrorDoc SuccessDoc)
+_runMIPSFromFileWithSPIM :: FilePath -> IO (Either ErrorDoc Int)
 _runMIPSFromFileWithSPIM path = do
     let stdin = ""
 
@@ -41,5 +41,10 @@ _runMIPSFromFileWithSPIM path = do
                         pretty stdout,
                         pretty "stderr: ",
                         pretty stderr]
-        ExitSuccess -> return $ Right $ pretty stdout
+        ExitSuccess ->
+            case lastMay (lines stdout) >>= readMaybe of
+                Just val -> return $ Right val
+                Nothing -> return $ Left $
+                                vcat [pretty "program returned non-integer output:",
+                                      pretty stdout]
 \end{code}

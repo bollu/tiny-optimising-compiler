@@ -61,5 +61,5 @@ main = do
             mProgramOutput <- interpretMIPSWithSPIM mipsasm
             case mProgramOutput of
                 Left err -> putStrLn . docToString $ err
-                Right val -> putStrLn . docToString $ (pretty "final value: " <+> val)
+                Right val -> putStrLn . docToString $ (pretty "final value: " <+> pretty val)
 \end{code}  

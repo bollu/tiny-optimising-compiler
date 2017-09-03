@@ -85,6 +85,8 @@ executable imperative-compiler
                        text,
                        containers,
                        mtl,
+                       -- For safe indexing.
+                       safe,
                        -- for trifecta (hashset)
                        unordered-containers
 
