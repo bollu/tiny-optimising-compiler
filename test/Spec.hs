@@ -6,6 +6,9 @@ import Test.Tasty.Runners
 import Data.Ord
 import qualified Data.Map as M
 import System.IO
+import Data.Text.Prettyprint.Doc
+import PrettyUtils
+
 
 import IR
 import Parser
@@ -14,6 +17,8 @@ import Language
 import ProgramToIR
 import TransformMem2Reg
 import TransformConstantFolding
+import TransformIRToMIPS
+import MIPSInterpreter(interpretMIPSWithSPIM)
 
 import Control.Monad(filterM)
 import Data.List(permutations)
@@ -32,8 +37,8 @@ resources = do
                                 return (f, contents)
 
 -- | Make a test case for a *single* pass
-mkPassTest :: FilePath -> String -> Pass -> TestTree
-mkPassTest filepath contents pass@(passname, _) =
+mkPassTest :: String -> Pass -> TestTree
+mkPassTest contents pass@(passname, _) =
     -- | use testCaseSteps so we can print errors on parsing and reference program evaluation.
     testCaseSteps (passname) $ \step ->  do
       parseSourceToIR step contents $ \seedir -> do
@@ -44,15 +49,37 @@ mkPassTest filepath contents pass@(passname, _) =
 mkAllPassesTests :: FilePath -> String -> TestTree
 mkAllPassesTests filepath contents =
     let
-        tests = map (mkPassTest  filepath contents) allPasses
+        tests = map (mkPassTest contents) allPasses
     in testGroup (filepath) tests
+
+
+-- | Make a test case that checks that MIPS output is the same as the
+-- | interpreter output.
+mkMIPSCodegenTest :: String -> TestTree
+mkMIPSCodegenTest contents =
+    -- | use testCaseSteps so we can print errors on parsing and reference program evaluation.
+    testCaseSteps ("MIPS code execution in SPIM") $ \step ->  do
+      parseSourceToIR step contents $ \seedir -> do
+           v <- runReferenceProgram step seedir
+           let mipsIR = (transformIRToMIPS . 
+                         transformConstantFold .
+                         transformMem2Reg) $ seedir
+           step "running IR on SPIM..."
+           mipsv <- interpretMIPSWithSPIM mipsIR
+           case mipsv of
+              Left err -> assertFailure . docToString $
+                pretty "SPIM error: " <+> err
+              Right mipsv -> v @=? Just mipsv
 
 main :: IO ()
 main = do
   filepathsWithContents <- resources
-  let tests = fmap (uncurry mkAllPassesTests) filepathsWithContents
-  let group = testGroup "All passes on all files" tests
-  defaultMain group
+  let passesTests = fmap (uncurry mkAllPassesTests) filepathsWithContents
+  let mipsTests = fmap (mkMIPSCodegenTest . snd) filepathsWithContents
+
+  defaultMain $ testGroup "All tests"
+    [testGroup "All passes on all files" passesTests,
+     testGroup "MIPS codegen & execution" mipsTests]
 
 --  | An IR pass
 type Pass = (String, IRProgram -> IRProgram)
@@ -106,15 +133,3 @@ verifyPass :: Pass -- The pass to run
               -> Assertion
 verifyPass (passname, passfn) seedir expectedVal = do
     expectedVal @=? runProgram (passfn $ seedir)
-
-
--- parseAndRunPasses :: String -> Either String (Maybe Int, [(String, Maybe Int)])
--- parseAndRunPasses s =
---  case parseProgram s of
---     Left err -> Left err
---     Right program -> do
---             let seedIR = programToIR program
---             let transformedPrograms = map (\(name, p) -> (name, p seedIR)) allPasses :: [(String, IRProgram)]
---             return $ (runProgram seedIR,
---                       map (\(name, p) -> (name, runProgram p))  transformedPrograms)
---

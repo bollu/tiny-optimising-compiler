@@ -113,6 +113,11 @@ test-suite test
                      , text
                      , containers
                      , mtl
+                     , safe
+                      -- To create temporary files.
+                     , temporary
+                      -- To launch SPIM.
+                     , process
                       -- for trifecta (hashset)
                      , unordered-containers
                      , directory
@@ -120,6 +125,7 @@ test-suite test
                        , BaseIR
                        , IRInterpreter
                        , MIPSInterpreter
+                       , MIPSAsm
                        , Language
                        , OrderedMap
                        , Parser
