@@ -9,6 +9,8 @@ source code to.
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module IR where
 import Data.Text.Prettyprint.Doc as PP
 import qualified Language as L
@@ -16,7 +18,8 @@ import qualified Data.List.NonEmpty as NE
 import qualified OrderedMap as M
 import Data.Functor.Identity
 import BaseIR
-
+import Data.Traversable(for)
+import Control.Applicative(liftA2)
 
 type IRBB = BasicBlock (Named Inst) RetInst
 type IRBBId = BBId (Named Inst) (RetInst)
@@ -58,8 +61,11 @@ forInstValue f (InstL lhs rhs) = InstL <$> (f lhs) <*> (f rhs)
 forInstValue f (InstAnd lhs rhs) = InstAnd <$> (f lhs) <*> (f rhs)
 forInstValue f (InstLoad lhs) = InstLoad <$> f lhs
 forInstValue f (InstStore lhs rhs) = InstStore <$> (f lhs) <*> (f rhs)
-forInstValue _ phi@(InstPhi _) = pure phi
-
+forInstValue f (InstPhi valList) = InstPhi <$> for valList (f' f) where
+  f' :: Applicative m => (Value -> m Value)
+      -> (IRBBId, Value)
+      -> m (IRBBId, Value)
+  f' f (irbbid, val) = liftA2 (,) (pure irbbid) (f val)
 
 instance Pretty Inst where
   pretty (InstAlloc) = pretty "alloc"
