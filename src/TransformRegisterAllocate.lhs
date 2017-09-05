@@ -19,6 +19,9 @@ import Debug.Trace
 import Data.Maybe (isJust)
 import MIPSAsm
 
+nRegisters :: Int
+nRegisters = 3
+
 bumpCounter :: a -> State Int (Int, a)
 bumpCounter a = do
                   count <- get
@@ -34,21 +37,41 @@ data LiveRangeBuilderContext = LiveRangeBuilderContext {
     ctxEnd :: M.OrderedMap String Int
 }
 
-data LiveRange = LiveRange { lrName :: String, lrBegin :: Int, lrEnd :: Int }
+data LiveRange = LiveRange { lrName :: String, lrBegin :: Int, lrEnd :: Int } deriving(Eq)
 
--- | Two live ranges are equal when their intervals overlaps
-instance Eq LiveRange where
-    (LiveRange _ b1 e1) == (LiveRange _ b2 e2) = b1 == b2 && e1 == e2
 
 -- | If L1 is contained in L2, then L1 < L2.
 instance Ord LiveRange where
     l1@(LiveRange _ b1 e1) <= l2@(LiveRange _ b2 e2) = 
         l1 == l2 || (b1 >= b2 && e1 <= e2)
 
+-- | Arrange live ranges as (left, right) where
+-- | begintime of left <= begin time of right
+arrangeLiveRangePair :: LiveRange ->  LiveRange -> (LiveRange, LiveRange)
+arrangeLiveRangePair l1@(LiveRange _ b1 _) l2@(LiveRange _ b2 _) = 
+    if b1 <= b2 then (l1, l2) else (l2, l1)
+
+-- | Compute the length of a live range
+liveRangeLength :: LiveRange -> Int
+liveRangeLength (LiveRange _ b e) = e - b + 1
+
+-- | Check if the live ranges intersect.
+-- | If the length of the hull is less than or equal to the sum of
+-- | lengths of live ranges, then they do not intersect.
 liveRangeIntersects :: LiveRange -> LiveRange -> Bool
-liveRangeIntersects l1@(LiveRange _ b1 e1) l2@(LiveRange _ b2 e2) = 
-    l1 <= l2 || e1 >= b2 && b1 <= e2 || 
-    l2 <= l1 || e2 >= b1 && b2 <= e1 
+liveRangeIntersects l1 l2 = let
+    (LiveRange _ b _, LiveRange _ _ e) = arrangeLiveRangePair l1 l2
+    in
+        e - b + 1 <= liveRangeLength l1 + liveRangeLength l2
+
+-- | Make an interference graph from the given live ranges.
+mkLiveRangeInterferenceGraph :: [LiveRange] -> Graph String
+mkLiveRangeInterferenceGraph lrs = Graph $ do
+    l1 <- lrs
+    l2 <- lrs
+    guard $ l1 /= l2
+    guard $ liveRangeIntersects l1 l2
+    [(lrName l1, lrName l2), (lrName l2, lrName l1)]
 
 -- | Arrange by the begin time
 arrangeByStart :: [LiveRange] -> [LiveRange]
@@ -57,6 +80,7 @@ arrangeByStart = sortBy (\(lrBegin -> b1) (lrBegin -> b2) -> b1 `compare` b2)
 -- | Arrange by the end time
 arrangeByEnd :: [LiveRange] -> [LiveRange]
 arrangeByEnd = sortBy (\(lrEnd -> e1) (lrEnd -> e2) -> e1 `compare` e2)
+
 
 
 instance Pretty LiveRange where
@@ -120,19 +144,35 @@ mkLiveRangesFromContext (LiveRangeBuilderContext begin end) = lrs
     lrs = map (\k -> LiveRange k (begin M.! k) (end M.! k)) ks
 
 
+-- | Construct an interference graph of the given program.
+mkInterferenceGraph :: MProgram -> Graph String
+mkInterferenceGraph = mkLiveRangeInterferenceGraph .
+    mkLiveRangesFromContext .
+    mkLiveRangeBuilderContext .
+    timestampProgram
+
+
+-- | Color the registers of a program.
+-- | Returns a map from register name to the color.
+-- | If a name does not exist on the map, then it must be spilled.
+colorRegisters :: MProgram -> M.OrderedMap String Int
+colorRegisters = greedyColorGraph nRegisters . mkInterferenceGraph
+
 -- | Program with each instruction timestamped
 type MProgramTimestamped = Program (Int, MInst) [(Int, MTerminatorInst)]
 
 timestampProgram :: MProgram -> MProgramTimestamped
 timestampProgram p = evalState (traverseProgramBBs (traverseBB bumpCounter (\ris -> for ris bumpCounter)) p) 0
 
-mkInterferenceGraph :: MProgram -> Graph (Label MInst)
-mkInterferenceGraph = undefined
 
 transformRegisterAllocate :: MProgram -> MProgram
 transformRegisterAllocate mprogram = trace (docToString $ 
     vcat [pretty "timestamped program:",
     indent 4 $ pretty (timestampProgram mprogram),
     pretty "live range info: ",
-    indent 4. pretty . mkLiveRangeBuilderContext . timestampProgram $ mprogram]) mprogram
+    indent 4. pretty . mkLiveRangeBuilderContext . timestampProgram $ mprogram,
+    pretty "interference graph:",
+    indent 4. pretty . mkInterferenceGraph $ mprogram,
+    pretty "coloring:",
+    indent 4 . pretty . colorRegisters $ mprogram]) mprogram
 \end{code}

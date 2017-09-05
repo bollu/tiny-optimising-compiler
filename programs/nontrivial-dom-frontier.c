@@ -10,10 +10,10 @@ if x < 1 {
 };
 
 if y < 42 {
-    assign y :=  y * 4;
+    assign y :=  y + 4;
 } else {
-    assign y := y * 5;
+    assign y := y + 5;
 };
 
-assign x := 2 * y;
+assign x := 2 + y;
 return x;

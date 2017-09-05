@@ -70,7 +70,7 @@ _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
 
         -- largest color
         largestAdjColor = case adjColors of
-                            [] -> 1
+                            [] -> 0
                             xs -> maximum xs
 
         -- Leave it uncolored it we can't find a color
@@ -83,8 +83,8 @@ _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
 
 
 -- | Color the graph greedily and return the mapping of colors
-greedyColorGraph :: Ord a => Graph a -> NGraphColors -> M.OrderedMap a Int
-greedyColorGraph g ngraphcolors =
+greedyColorGraph :: Ord a => NGraphColors -> Graph a -> M.OrderedMap a Int
+greedyColorGraph ngraphcolors g =
     _greedyColorGraph g (S.fromList (vertices g))
                       mempty ngraphcolors
 
