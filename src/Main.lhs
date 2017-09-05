@@ -13,6 +13,7 @@ import TransformConstantFolding
 import TransformIRToMIPS
 import PrettyUtils
 import MIPSInterpreter
+import TransformRegisterAllocate
 import qualified OrderedMap as M
 import qualified MIPSAsm as MIPS
 
@@ -53,7 +54,7 @@ main = do
             finalProgram <- runPasses pipeline irprogram
 
             putStrLn "*** MIPS assembly *** "
-            let mipsasm = transformIRToMIPS finalProgram
+            let mipsasm = transformRegisterAllocate . transformIRToMIPS $ finalProgram
             putStrLn . docToString . MIPS.printMIPSAsm $ mipsasm
             -- putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram
 

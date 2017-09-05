@@ -1,6 +1,8 @@
 \begin{code}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
+
 module MIPSAsm(MReg(..),
 MRegLabel,
 MBBLabel,
@@ -12,7 +14,9 @@ MTerminatorInst(..),
 regZero,
 rega0,
 regv0,
-printMIPSAsm) where
+printMIPSAsm,
+traverseMInstReg,
+traverseMTerminatorInstReg) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -22,6 +26,8 @@ import qualified Data.List.NonEmpty as NE
 import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
+import Data.MonoTraversable
+
 
 
 type MRegLabel = Label MReg
@@ -41,7 +47,7 @@ regv0 = MRegReal "v0"
 
 instance Pretty MReg where
     pretty (MRegReal name) = pretty "$" PP.<> pretty name
-    pretty (MRegVirtual i) = pretty "$virt" PP.<> pretty i
+    pretty (MRegVirtual i) = pretty "$virt-" PP.<> pretty i
 
 
 data MInst where
@@ -60,6 +66,30 @@ mkMov :: MReg -- ^ Destination register
         -> MReg  -- ^ Source register
         -> MInst
 mkMov dest src = Madd dest regZero src
+
+type instance Element MInst = MReg
+
+instance MonoFunctor MInst where
+    omap f (Mli reg i) = Mli (f reg) i
+    omap f (Mmflo reg) = Mmflo (f reg)
+    omap f (Madd r1 r2 r3) = Madd (f r1) (f r2) (f r3)
+    omap f (Maddi r1 r2 i) = Maddi (f r1) (f r2) i
+    omap f (Mori r1 r2 i) = Mori (f r1) (f r2) i
+    omap f (Mslt r1 r2 r3) = Mslt (f r1) (f r2) (f r3)
+    omap f (Mslti r1 r2 i) = Mori (f r1) (f r2) i
+    omap f (Mmult r1 r2) = Mmult (f r1) (f r2)
+    omap _ Msyscall = Msyscall
+
+traverseMInstReg :: Applicative f => (MReg -> f MReg) -> MInst -> f MInst
+traverseMInstReg f (Mli reg i) = liftA2 Mli (f reg) (pure i)
+traverseMInstReg f (Mmflo reg) = Mmflo <$> (f reg)
+traverseMInstReg f (Madd r1 r2 r3) = Madd <$> f r1 <*> f r2 <*> f r3
+traverseMInstReg f (Maddi r1 r2 i) = Maddi <$> f r1 <*> f r2 <*> pure i
+traverseMInstReg f (Mori r1 r2 i) = Mori <$> f r1 <*> f r2 <*> pure i
+traverseMInstReg f (Mslt r1 r2 r3) = Mslt <$> f r1 <*> f r2 <*> f r3
+traverseMInstReg f (Mslti r1 r2 i) = Mslti <$> f r1 <*> f r2 <*> pure i
+traverseMInstReg f (Mmult r1 r2) = Mmult <$> f r1 <*> f r2
+traverseMInstReg f Msyscall = pure Msyscall
 
 
 
@@ -88,6 +118,13 @@ instance Pretty MTerminatorInst where
     pretty (Mj dest) = pretty "j" <+> pretty dest
     pretty (Mbeqz cond dest) = pretty "beqz" <+> pretty cond <+> pretty dest
     pretty (Mbgtz cond dest) = pretty "Mbgtz" <+> pretty cond <+> pretty dest
+
+traverseMTerminatorInstReg :: Applicative f => (MReg -> f MReg) -> 
+    MTerminatorInst -> f MTerminatorInst
+traverseMTerminatorInstReg f Mexit = pure Mexit
+traverseMTerminatorInstReg f (Mj lbl) = pure (Mj lbl)
+traverseMTerminatorInstReg f (Mbeqz reg lbl) = Mbeqz <$> f reg <*> pure lbl
+traverseMTerminatorInstReg f (Mbgtz reg lbl) = Mbgtz <$> f reg <*> pure lbl
 
 type MBBLabel = Label MBB
 type MBB = BasicBlock MInst [MTerminatorInst]
