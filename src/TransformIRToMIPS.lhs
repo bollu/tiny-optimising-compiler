@@ -39,6 +39,7 @@ import Graph
 import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
+import Debug.Trace(trace)
 import MIPSAsm
 
 -- | Convert a label of an instruction to a virtual register.
@@ -97,14 +98,14 @@ transformInst inst =
         pretty inst
 
 
--- | Make a MInst that sets a MReg (which _must_ be a real register) to a value.
-mkMInstSetRealRegToValue :: MReg -- ^ Register to set
+-- | Make a MInst that sets a MReg to a value.
+mkMInstSetRegToVal :: MReg -- ^ Register to set
                         -> Value -- ^ Value to use the register to
                         -> MInst
-mkMInstSetRealRegToValue (MRegReal name) (ValueConstInt i) = 
-    Mli (MRegReal name) i
-mkMInstSetRealRegToValue (MRegReal name) (ValueInstRef lbl) = 
-    mkMov (MRegReal name) (lblToReg lbl)
+mkMInstSetRegToVal reg (ValueConstInt i) = 
+    Mli reg i
+mkMInstSetRegToVal reg (ValueInstRef lbl) = 
+    mkMov reg (lblToReg lbl)
 
 -- | Code needed in $v0 to issue "print integer".
 codePrintInt :: Int
@@ -117,12 +118,16 @@ codeExit = 10
 -- | Transform a `RetInst` into possible `MInsts` and a terminator inst.
 transformRetInst :: RetInst -> ([MInst], [MTerminatorInst])
 transformRetInst (RetInstRet v) = 
-    ([mkMInstSetRealRegToValue rega0 v,
+    ([mkMInstSetRegToVal rega0 v,
       Mli regv0 codePrintInt,
       Msyscall,
       Mli regv0 codeExit,
       Msyscall],
       [Mexit])
+
+transformRetInst (RetInstTerminal) = 
+    ([Mli regv0 codeExit,
+      Msyscall], [Mexit])
 
 transformRetInst (RetInstBranch lbl) = 
     ([], [Mbeqz regZero (unsafeTransmuteLabel lbl)])
@@ -139,11 +144,17 @@ transformRetInst (RetInstConditionalBranch
 -- | Note that these should ideally be fused in a previous pass
 -- | TODO: implement BB fusion.
 transformRetInst (RetInstConditionalBranch 
-    (ValueConstInt 0)
-    _
-    (unsafeTransmuteLabel -> elselbl)) = 
-        ([], 
-        [Mj elselbl])
+    (ValueConstInt 0) _ (unsafeTransmuteLabel -> elselbl)) = 
+        ([], [Mj elselbl])
+
+-- | Shortcut a jump from a branch of "1" to a direct jump
+-- | Note that these should ideally be fused in a previous pass
+-- | TODO: implement BB fusion.
+
+transformRetInst (RetInstConditionalBranch 
+    (ValueConstInt 1) (unsafeTransmuteLabel -> thenlbl) _)  = 
+        ([], [Mj thenlbl])
+
 
 transformRetInst retinst = 
     error . docToString $ pretty "unimplemented lowering for RetInst: " <+>
@@ -152,16 +163,21 @@ transformRetInst retinst =
 -- | Emit code such that if the current basic block jumps to a basic block
 -- | that has a phi node, we write to a register that the phi node would have
 -- | occupied.
-emitFusePhi :: CFG -> IRProgram -> IRBBId -> [MInst]
+emitFusePhi :: CFG -> IRProgram -> 
+            IRBBId -- ^ The basic block to emit code to handle phi nodes of successors
+            -> [MInst] -- ^ Instructions that store values into phi nodes.
 emitFusePhi cfg Program{programBBMap=bbmap} curbbid =
     let
-        -- | Make an instruction that creates a `mov' into the phi node
-        -- | register from the source register.
-        mkMovForPhi :: (Label Inst, Label Inst) -> MInst
-        mkMovForPhi (phiname, srcname) = mkMov
-            (MRegVirtual(unsafeTransmuteLabel phiname))
-            (MRegVirtual(unsafeTransmuteLabel srcname))
-    in map mkMovForPhi succPhiReferences
+        -- | Make an instruction that stores a Value into the phi node,
+        mkStoreForPhi :: Label Inst -- ^ Label of the Phi node
+                         -> Value -- ^ Value to store in the Phi node
+                         -> MInst
+        mkStoreForPhi (unsafeTransmuteLabel -> phiname) val = 
+            mkMInstSetRegToVal (MRegVirtual phiname) val
+    in 
+    trace (docToString $ pretty "successors(" <+> pretty curbbid <+> pretty "): "
+           <+> hcat  (map pretty succphis) )
+    (map (uncurry mkStoreForPhi) succPhiReferences)
     where
         -- | BBs that are successors in the CFG
         succbbs :: [IRBB]
@@ -172,10 +188,10 @@ emitFusePhi cfg Program{programBBMap=bbmap} curbbid =
         -- | Names of variables referred to by successors of current BB
         -- | LHS is the phi node name.
         -- | RHS is the source inst name.
-        succPhiReferences :: [(Label Inst, Label Inst)]
+        succPhiReferences :: [(Label Inst, Value)]
         succPhiReferences = succphis >>= \(Named phiname phi) -> 
             case getPhiValueForBB curbbid phi of
-                Just (ValueInstRef instname) -> [(phiname, instname)]
+                Just val -> [(phiname, val)]
                 _ -> []
       
 
@@ -202,38 +218,51 @@ we re-label our entry basic block to `main`.
 
 \begin{code}
 -- Rename the entry BB to "main"
-renameEntryBlockToMain :: IRProgram -> IRProgram
-renameEntryBlockToMain p@Program {
-  programBBMap=bbmap,
-  programEntryBBId=entrybbid
-} = mapProgramBBs (mapBB id (mapRetInstBBId setEntryToMain)) p' where
-    entryBB :: IRBB
-    entryBB = (bbmap M.! entrybbid) {
+-- renameEntryBlockToMain :: IRProgram -> IRProgram
+-- renameEntryBlockToMain p@Program {
+--   programBBMap=bbmap,
+--   programEntryBBId=entrybbid
+-- } = mapProgramBBs (mapBB id (mapRetInstBBId setEntryToMain)) p' where
+--     entryBB :: IRBB
+--     entryBB = (bbmap M.! entrybbid) {
+--         bbLabel=Label "main"
+--     }
+
+--     -- | bbmap with entry block changed to "main"
+--     bbmap' = M.insert (Label "main") entryBB 
+--                     (M.delete entrybbid bbmap)
+
+--     -- | IRProgram with the entry block edited to be "main"
+--     p' :: IRProgram
+--     p' = Program {
+--         programEntryBBId=Label "main",
+--         programBBMap = bbmap'
+--     }
+--     -- | Rewrite the "entry" BBId to "main".
+--     setEntryToMain :: IRBBId -> IRBBId
+--     setEntryToMain lbl = if lbl == entrybbid then Label "main" else lbl
+
+addJumpToEntry :: IRBBId -> MProgram -> MProgram
+addJumpToEntry entrybbid mprogram@Program{
+        programBBMap=bbmap
+    } = mprogram {
+        programBBMap = M.insert (Label "main") mainBB bbmap,
+        programEntryBBId = Label "main"
+} where
+    -- | Have a basic block whose only job is to jump to the actual entry
+    mainBB = BasicBlock {
+        bbInsts=[],
+        bbRetInst=[Mj (unsafeTransmuteLabel entrybbid)],
         bbLabel=Label "main"
     }
-
-    -- | bbmap with entry block changed to "main"
-    bbmap' = M.insert (Label "main") entryBB 
-                    (M.delete entrybbid bbmap)
-
-    -- | IRProgram with the entry block edited to be "main"
-    p' :: IRProgram
-    p' = Program {
-        programEntryBBId=Label "main",
-        programBBMap = bbmap'
-    }
-    -- | Rewrite the "entry" BBId to "main".
-    setEntryToMain :: IRBBId -> IRBBId
-    setEntryToMain lbl = if lbl == entrybbid then Label "main" else lbl
-
 \end{code}
 
 Finally, we write the interface to our transformation as a function
 `transformIRToMIPS`.
 \begin{code}
 transformIRToMIPS :: IRProgram -> MProgram
-transformIRToMIPS irprogram = 
-    mapProgramBBs (transformBB cfg irprogram) (renameEntryBlockToMain irprogram) where
-        cfg = mkCFG (programBBMap irprogram)
+transformIRToMIPS p = 
+    addJumpToEntry (programEntryBBId p) (mapProgramBBs (transformBB cfg p) p) where
+        cfg = mkCFG (programBBMap p)
 \end{code}
 

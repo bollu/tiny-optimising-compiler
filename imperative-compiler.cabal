@@ -62,7 +62,6 @@ executable imperative-compiler
                  MIPSInterpreter,
                  MIPSAsm,
                  Graph,
-                 RegisterAllocation,
                  Language,
                  TransformConstantFolding,
                  TransformIRToMIPS,

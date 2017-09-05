@@ -5,6 +5,7 @@
 
 module MIPSAsm(MReg(..),
 MRegLabel,
+mkTemporaryReg,
 MBBLabel,
 MBB,
 MProgram,
@@ -16,7 +17,9 @@ rega0,
 regv0,
 printMIPSAsm,
 traverseMInstReg,
-traverseMTerminatorInstReg) where
+mapMInstReg,
+traverseMTerminatorInstReg,
+mapMTerminatorInstReg) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -27,6 +30,7 @@ import BaseIR
 import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 import Data.MonoTraversable
+import Data.Functor.Identity(Identity(..), runIdentity)
 
 
 
@@ -43,6 +47,14 @@ rega0 = MRegReal "a0"
 
 regv0 :: MReg
 regv0 = MRegReal "v0"
+
+-- | Count from 0. Make the `n`th temporary register.
+-- | There are 8 of these. 
+mkTemporaryReg :: Int -> MReg
+mkTemporaryReg n =
+    if n > 7 || n < 0
+    then error . docToString $ pretty "expected 0 <= n <= 7, found:" <+> pretty n
+    else MRegReal ("t" ++ show n)
 
 
 instance Pretty MReg where
@@ -91,6 +103,8 @@ traverseMInstReg f (Mslti r1 r2 i) = Mslti <$> f r1 <*> f r2 <*> pure i
 traverseMInstReg f (Mmult r1 r2) = Mmult <$> f r1 <*> f r2
 traverseMInstReg f Msyscall = pure Msyscall
 
+mapMInstReg :: (MReg -> MReg) -> MInst -> MInst
+mapMInstReg f inst = runIdentity $ traverseMInstReg (Identity . f) inst
 
 
 _prettyMBinOp :: (Pretty a, Pretty b, Pretty c) => 
@@ -117,7 +131,7 @@ instance Pretty MTerminatorInst where
     pretty (Mexit) = pretty "# <exit>"
     pretty (Mj dest) = pretty "j" <+> pretty dest
     pretty (Mbeqz cond dest) = pretty "beqz" <+> pretty cond <+> pretty dest
-    pretty (Mbgtz cond dest) = pretty "Mbgtz" <+> pretty cond <+> pretty dest
+    pretty (Mbgtz cond dest) = pretty "bgtz" <+> pretty cond <+> pretty dest
 
 traverseMTerminatorInstReg :: Applicative f => (MReg -> f MReg) -> 
     MTerminatorInst -> f MTerminatorInst
@@ -125,6 +139,11 @@ traverseMTerminatorInstReg f Mexit = pure Mexit
 traverseMTerminatorInstReg f (Mj lbl) = pure (Mj lbl)
 traverseMTerminatorInstReg f (Mbeqz reg lbl) = Mbeqz <$> f reg <*> pure lbl
 traverseMTerminatorInstReg f (Mbgtz reg lbl) = Mbgtz <$> f reg <*> pure lbl
+
+mapMTerminatorInstReg :: (MReg -> MReg) -> MTerminatorInst -> MTerminatorInst
+mapMTerminatorInstReg f t = 
+    runIdentity $ traverseMTerminatorInstReg (Identity . f) t
+
 
 type MBBLabel = Label MBB
 type MBB = BasicBlock MInst [MTerminatorInst]

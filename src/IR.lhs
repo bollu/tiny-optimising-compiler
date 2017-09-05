@@ -103,6 +103,7 @@ foldMapInstValue f inst = execState final Monoid.mempty where
   -- final :: State m Inst
   final = (forInstValue go inst)
 
+
 instance Pretty Inst where
   pretty (InstAlloc) = pretty "alloc"
   pretty (InstAdd l r) = pretty "add" <+> pretty l <+> pretty r
@@ -189,6 +190,5 @@ replaceUsesOfInst instlbl newval program =
 
         fbb :: IRBB -> IRBB
         fbb = mapBB finst fretinst
-
 
 \end{code}

@@ -18,6 +18,7 @@ import ProgramToIR
 import TransformMem2Reg
 import TransformConstantFolding
 import TransformIRToMIPS
+import TransformRegisterAllocate
 import MIPSInterpreter(interpretMIPSWithSPIM)
 
 import Control.Monad(filterM)
@@ -61,7 +62,8 @@ mkMIPSCodegenTest filepath contents =
     testCaseSteps (filepath) $ \step ->  do
       parseSourceToIR step contents $ \seedir -> do
            v <- runReferenceProgram step seedir
-           let mipsIR = (transformIRToMIPS . 
+           let mipsIR = (transformRegisterAllocate .
+                         transformIRToMIPS . 
                          transformConstantFold .
                          transformMem2Reg) $ seedir
            step "running IR on SPIM..."

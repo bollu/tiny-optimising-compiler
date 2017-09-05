@@ -46,5 +46,8 @@ _runMIPSFromFileWithSPIM path = do
                 Just val -> return $ Right val
                 Nothing -> return $ Left $
                                 vcat [pretty "program returned non-integer output:",
+                                      pretty "stderr:",
+                                      pretty stderr,
+                                      pretty "stdout:",
                                       pretty stdout]
 \end{code}

@@ -20,13 +20,16 @@ import Data.Maybe (isJust)
 import MIPSAsm
 
 nRegisters :: Int
-nRegisters = 3
+nRegisters = 8
 
 bumpCounter :: a -> State Int (Int, a)
 bumpCounter a = do
                   count <- get
                   modify (+ 1)
                   return (count, a)
+
+-- | the type of an interference graph.
+type InterferenceGraph = Graph String
 
 -- | TODO: we coalesce both real and virtual registers here, so I need to use
 -- | String as the key. Find some way to keep type safety.
@@ -65,7 +68,7 @@ liveRangeIntersects l1 l2 = let
         e - b + 1 <= liveRangeLength l1 + liveRangeLength l2
 
 -- | Make an interference graph from the given live ranges.
-mkLiveRangeInterferenceGraph :: [LiveRange] -> Graph String
+mkLiveRangeInterferenceGraph :: [LiveRange] -> InterferenceGraph
 mkLiveRangeInterferenceGraph lrs = Graph $ do
     l1 <- lrs
     l2 <- lrs
@@ -82,7 +85,7 @@ arrangeByEnd :: [LiveRange] -> [LiveRange]
 arrangeByEnd = sortBy (\(lrEnd -> e1) (lrEnd -> e2) -> e1 `compare` e2)
 
 
-
+    
 instance Pretty LiveRange where
     pretty (LiveRange name b e) = pretty name <+> pretty ":" <+> parens (pretty b <+> pretty "to" <+> pretty e)
 
@@ -144,18 +147,32 @@ mkLiveRangesFromContext (LiveRangeBuilderContext begin end) = lrs
     lrs = map (\k -> LiveRange k (begin M.! k) (end M.! k)) ks
 
 
+-- | Assign physical registers to all virtual registers
+-- | Once this function is called, all variables are assigned physical registers
+-- | TODO: implement spilling.
+assignPhysicalRegisters :: M.OrderedMap String (Maybe Int) -> MProgram -> MProgram
+assignPhysicalRegisters regmap p = 
+    mapProgramBBs 
+        (mapBB (mapMInstReg assignRealReg)
+                (map (mapMTerminatorInstReg assignRealReg))) p where
+    assignRealReg :: MReg -> MReg
+    assignRealReg (MRegVirtual (Label name)) = 
+        case name `M.lookup` regmap of
+            Just (Just rnum) -> mkTemporaryReg (rnum - 1) -- | -1 because colors are [1..n]
+            Just (Nothing) -> error . docToString $ pretty "register needs to be spilled, unimplemented:" <+> pretty name
+            Nothing -> error . docToString $ pretty "register not assigned a color at all: " <+> pretty name
+    assignRealReg r = r
+
+
 -- | Construct an interference graph of the given program.
-mkInterferenceGraph :: MProgram -> Graph String
-mkInterferenceGraph = mkLiveRangeInterferenceGraph .
-    mkLiveRangesFromContext .
-    mkLiveRangeBuilderContext .
-    timestampProgram
+mkInterferenceGraph :: MProgram -> InterferenceGraph
+mkInterferenceGraph = mkLiveRangeInterferenceGraph . mkLiveRangesFromContext . mkLiveRangeBuilderContext . timestampProgram
 
 
 -- | Color the registers of a program.
 -- | Returns a map from register name to the color.
 -- | If a name does not exist on the map, then it must be spilled.
-colorRegisters :: MProgram -> M.OrderedMap String Int
+colorRegisters :: MProgram -> M.OrderedMap String (Maybe GraphColor)
 colorRegisters = greedyColorGraph nRegisters . mkInterferenceGraph
 
 -- | Program with each instruction timestamped
@@ -174,5 +191,6 @@ transformRegisterAllocate mprogram = trace (docToString $
     pretty "interference graph:",
     indent 4. pretty . mkInterferenceGraph $ mprogram,
     pretty "coloring:",
-    indent 4 . pretty . colorRegisters $ mprogram]) mprogram
+    indent 4 . pretty . colorRegisters $ mprogram]) (assignPhysicalRegisters coloring mprogram) where
+        coloring = colorRegisters mprogram
 \end{code}

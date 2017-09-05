@@ -50,14 +50,15 @@ getAllChildren tree@(Graph edges) a =
 vertices :: Eq a => Graph a  -> [a]
 vertices (Graph edges) = nub (map fst edges ++ map snd edges)
 
+-- | Colors are assigned from [1..NGraphColors]
 type GraphColor = Int
 type NGraphColors = Int
 
 _greedyColorGraph :: Ord a => Graph a -- ^ Graph 
                             -> S.Set a -- ^ Set of vertices
-                            -> M.OrderedMap a GraphColor -- ^ Mapping from vertices to colors
+                            -> M.OrderedMap a (Maybe GraphColor) -- ^ Mapping from vertices to colors
                             -> NGraphColors -- ^ Total number of graph colors available
-                            -> M.OrderedMap a GraphColor -- ^ Final colored graph
+                            -> M.OrderedMap a (Maybe GraphColor) -- ^ Final colored graph
 _greedyColorGraph _ (null -> True) coloring ncolors = coloring
 _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
     _greedyColorGraph g vs' coloring' ncolors where
@@ -66,7 +67,9 @@ _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
 
         -- colors of adjacent vertices
         adjColors :: [GraphColor]
-        adjColors = mconcat $ fmap (\v -> maybeToList (v `M.lookup` coloring)) adjvs
+        adjColors = mconcat $ fmap (\v -> case (v `M.lookup` coloring) of
+                                            Just (Just c) -> [c]
+                                            _ -> []) adjvs
 
         -- largest color
         largestAdjColor = case adjColors of
@@ -75,15 +78,15 @@ _greedyColorGraph g vs@(S.elemAt 0 -> v) coloring ncolors  =
 
         -- Leave it uncolored it we can't find a color
         coloring' = if largestAdjColor == ncolors
-                then coloring
-                else M.insert v (largestAdjColor + 1) coloring
+                then M.insert v Nothing coloring
+                else M.insert v (Just (largestAdjColor + 1)) coloring
 
         -- remove vertex we currently processed
         vs' = S.deleteAt 0 vs
 
 
 -- | Color the graph greedily and return the mapping of colors
-greedyColorGraph :: Ord a => NGraphColors -> Graph a -> M.OrderedMap a Int
+greedyColorGraph :: Ord a => NGraphColors -> Graph a -> M.OrderedMap a (Maybe Int)
 greedyColorGraph ngraphcolors g =
     _greedyColorGraph g (S.fromList (vertices g))
                       mempty ngraphcolors
