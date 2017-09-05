@@ -217,31 +217,6 @@ SPIM assumes that our entry label is called `main`. To stick to the convention,
 we re-label our entry basic block to `main`.
 
 \begin{code}
--- Rename the entry BB to "main"
--- renameEntryBlockToMain :: IRProgram -> IRProgram
--- renameEntryBlockToMain p@Program {
---   programBBMap=bbmap,
---   programEntryBBId=entrybbid
--- } = mapProgramBBs (mapBB id (mapRetInstBBId setEntryToMain)) p' where
---     entryBB :: IRBB
---     entryBB = (bbmap M.! entrybbid) {
---         bbLabel=Label "main"
---     }
-
---     -- | bbmap with entry block changed to "main"
---     bbmap' = M.insert (Label "main") entryBB 
---                     (M.delete entrybbid bbmap)
-
---     -- | IRProgram with the entry block edited to be "main"
---     p' :: IRProgram
---     p' = Program {
---         programEntryBBId=Label "main",
---         programBBMap = bbmap'
---     }
---     -- | Rewrite the "entry" BBId to "main".
---     setEntryToMain :: IRBBId -> IRBBId
---     setEntryToMain lbl = if lbl == entrybbid then Label "main" else lbl
-
 addJumpToEntry :: IRBBId -> MProgram -> MProgram
 addJumpToEntry entrybbid mprogram@Program{
         programBBMap=bbmap
