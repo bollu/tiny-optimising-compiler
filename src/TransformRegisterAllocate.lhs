@@ -18,6 +18,7 @@ import PrettyUtils
 import Debug.Trace
 import Data.Maybe (isJust)
 import MIPSAsm
+import qualified Data.Set as S
 
 nRegisters :: Int
 nRegisters = 8
@@ -156,12 +157,95 @@ assignPhysicalRegisters regmap p =
         (mapBB (mapMInstReg assignRealReg)
                 (map (mapMTerminatorInstReg assignRealReg))) p where
     assignRealReg :: MReg -> MReg
-    assignRealReg (MRegVirtual (Label name)) = 
+    assignRealReg vreg@(MRegVirtual (Label name)) = 
         case name `M.lookup` regmap of
             Just (Just rnum) -> mkTemporaryReg (rnum - 1) -- | -1 because colors are [1..n]
-            Just (Nothing) -> error . docToString $ pretty "register needs to be spilled, unimplemented:" <+> pretty name
+            -- Keep registers to be spilled
+            Just (Nothing) -> vreg -- error . docToString $ pretty "register needs to be spilled, unimplemented:" <+> pretty name
             Nothing -> error . docToString $ pretty "register not assigned a color at all: " <+> pretty name
     assignRealReg r = r
+
+
+-- | The worker registers that are available
+spillWorkRegs :: [MReg]
+spillWorkRegs = map mkTemporaryReg [0..7]
+
+newtype StackOffset = StackOffset Int
+
+instance Pretty StackOffset where
+    pretty (StackOffset loc) = pretty "stackoffset" PP.<> braces (pretty loc)
+
+-- | Spill the registers in a given instruction, to create a sequence of
+-- | instructions that spill and restore if needed
+spillInstRegs :: [MReg] -- ^ List of real registers that can be used for computation
+        -> S.Set (Label MReg) -- ^ registers to spill
+        -> M.OrderedMap String StackOffset -- ^ Map from registers to stack offsets (virtual and physical)
+        ->  MInst -> [MInst]
+spillInstRegs realregs allToSpill offsets i =
+        if length curSpill > length realregs
+        then error . docToString $ pretty "This instruction needs more physical registers than available!" <+> pretty i
+        else restoringInsts ++ [mapMInstReg assignRealReg i] ++ spillingInsts
+    where
+        assignRealReg :: MReg -> MReg
+        assignRealReg (MRegVirtual lbl) = curSpillToActive M.! lbl
+        assignRealReg r = r
+         -- | From a register, extract a label if it exists into a Set.
+        extractRegLabel :: MReg -> S.Set (Label MReg)
+        extractRegLabel (MRegVirtual lbl) = S.singleton lbl
+        extractRegLabel _ = mempty
+        -- | Set of registers in the current instruction
+        regsInInst :: S.Set (Label MReg)
+        regsInInst = foldMapMInstReg extractRegLabel i
+        -- | Set of registers to spill
+        curSpill :: S.Set (Label MReg)
+        curSpill = regsInInst `S.intersection` allToSpill
+        -- | A map from registers that need to be spilled, to physical registers
+        -- | that we use to perform their computation
+        curSpillToActive :: M.OrderedMap (Label MReg) MReg
+        curSpillToActive = M.fromList $ zip (S.toList curSpill) realregs
+
+        -- | Instructions that bring back used values from the stack.
+        -- | Load a `virtual` register that has been spilled onto the stack
+        -- | to a physical work register.
+        restoringInsts :: [MInst]
+        restoringInsts = do
+            rname <- S.toList curSpill
+            let physicalreg = curSpillToActive M.! rname
+            let (StackOffset virtualoffset) = offsets M.! unLabel rname
+            let (StackOffset physicaloffset) = offsets M.! regToString physicalreg
+
+            [Msw physicalreg physicaloffset regsp, -- ^ Store value of register into stack slot
+             Mlw physicalreg virtualoffset regsp] -- ^ Move value from stack slot into physical register]
+        -- | Instructions that spill out our values back to the stack.
+        -- | Restore the original value of the work registers, and store the
+        -- | values of all other registers
+        spillingInsts :: [MInst]
+        spillingInsts = do
+            rname <- S.toList curSpill
+            let physicalreg = curSpillToActive M.! rname
+            let (StackOffset virtualoffset) = offsets M.! unLabel rname
+            let (StackOffset physicaloffset) = offsets M.! regToString physicalreg
+
+            [ Msw physicalreg virtualoffset regsp, -- ^ Store value of register into stack slot
+              Mlw physicalreg physicaloffset  regsp] -- ^ Move value from stack slot into physical register]
+
+
+
+
+spillVirtualRegisters :: S.Set (Label MReg) -- ^Names of registers to be spilled 
+    -> MProgram  -- ^ Source program
+    -> MProgram -- ^ Final program
+spillVirtualRegisters toSpill p = 
+    mapProgramBBs (mapBBInstLocus (spillInstRegs spillWorkRegs toSpill offsets)) p where
+        -- | all registers indexed
+        regsIndexed :: [(Int, String)]
+        regsIndexed = zip [0..] (map unLabel (S.toList toSpill) ++ map regToString spillWorkRegs)
+
+        -- | Stack offsets of registers that are to be spilled
+        offsets :: M.OrderedMap String StackOffset  
+        offsets = M.fromList $ 
+            map (\(i, reg) -> (reg, StackOffset (i * negate 4))) regsIndexed
+
 
 
 -- | Construct an interference graph of the given program.
@@ -191,6 +275,21 @@ transformRegisterAllocate mprogram = trace (docToString $
     pretty "interference graph:",
     indent 4. pretty . mkInterferenceGraph $ mprogram,
     pretty "coloring:",
-    indent 4 . pretty . colorRegisters $ mprogram]) (assignPhysicalRegisters coloring mprogram) where
+    indent 4 . pretty . colorRegisters $ mprogram,
+    pretty "physical regs assigned program: ",
+    indent 4 . pretty $ physicalAssignedProgram,
+    pretty "Spilled program: ",
+    indent 4 . pretty $ spilledProgram]) spilledProgram where
         coloring = colorRegisters mprogram
+
+        physicalAssignedProgram :: MProgram
+        physicalAssignedProgram = (assignPhysicalRegisters coloring mprogram)
+
+        spilledProgram :: MProgram
+        spilledProgram = spillVirtualRegisters (S.fromList registersToSpill) physicalAssignedProgram
+
+        registersToSpill :: [Label MReg]
+        registersToSpill = M.foldMapWithKey (\k mColor -> case mColor of 
+                                                            Just _ -> []
+                                                            Nothing -> [Label k]) coloring
 \end{code}

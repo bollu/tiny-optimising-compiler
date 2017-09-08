@@ -110,6 +110,30 @@ traverseBB finst fretinst (BasicBlock insts retinst lbl) =
         retinst' = fretinst retinst
         insts' = for insts finst
 
+
+weaveEffect :: (Traversable f, Applicative f, Monad t, Traversable t) => (a -> f (t b))
+  -> t a -> f (t b)
+weaveEffect f as = join <$> intermediate -- f (t t b)
+  where
+    intermediate = for as f
+    -- join :: t (t b) -> t b
+    join ttb = ttb >>= (\tb -> tb)
+
+-- | Run an effect on a basic block, while allowing to create a "locus" around
+-- | an instruction. This can be used to delete instructions, or add a sequence
+-- | of instructions for one original instruction.
+traverseBBInstLocus :: (Applicative f, Traversable f) => 
+  (inst -> f [inst'])
+  -> BasicBlock inst ret 
+  -> f (BasicBlock inst' ret)
+traverseBBInstLocus finst (BasicBlock insts retinst lbl) =
+
+    BasicBlock <$> insts'<*> pure retinst <*> pure (unsafeTransmuteLabel lbl) where
+      insts' = weaveEffect finst insts
+
+
+mapBBInstLocus :: (inst -> [inst']) -> BasicBlock inst ret -> BasicBlock inst' ret
+mapBBInstLocus f bb = runIdentity $ traverseBBInstLocus (Identity . f) bb
 -- | Fold from the first instruction to the last one, and then on the
 -- | RetInst of a BB.
 foldlBB :: collect

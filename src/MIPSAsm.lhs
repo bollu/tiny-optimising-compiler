@@ -11,13 +11,16 @@ MBB,
 MProgram,
 MInst(..),
 mkMov,
+regToString,
 MTerminatorInst(..),
 regZero,
 rega0,
 regv0,
+regsp,
 printMIPSAsm,
 traverseMInstReg,
 mapMInstReg,
+foldMapMInstReg,
 traverseMTerminatorInstReg,
 mapMTerminatorInstReg) where
 import qualified OrderedMap as M
@@ -31,6 +34,7 @@ import Data.Text.Prettyprint.Doc as PP
 import PrettyUtils
 import Data.MonoTraversable
 import Data.Functor.Identity(Identity(..), runIdentity)
+import qualified Data.Monoid as Monoid
 
 
 
@@ -38,6 +42,12 @@ type MRegLabel = Label MReg
 
 -- A register for our machine instructions.
 data MReg = MRegVirtual MRegLabel | MRegReal String
+
+
+-- | Convert from a register to a stringified name.
+regToString :: MReg -> String
+regToString (MRegVirtual (Label name)) = name
+regToString (MRegReal name) = name
 
 regZero :: MReg
 regZero = MRegReal "zero"
@@ -47,6 +57,11 @@ rega0 = MRegReal "a0"
 
 regv0 :: MReg
 regv0 = MRegReal "v0"
+
+-- | Stack pointer register
+regsp :: MReg
+regsp = MRegReal "sp"
+
 
 -- | Count from 0. Make the `n`th temporary register.
 -- | There are 8 of these. 
@@ -71,6 +86,10 @@ data MInst where
     Mslt :: MReg -> MReg -> MReg -> MInst
     Mslti :: MReg -> MReg -> Int -> MInst
     Mmult :: MReg -> MReg -> MInst
+    -- | Store a register word with an immediate mode offset and a base register.
+    Msw :: MReg -> Int -> MReg -> MInst
+    -- | Load into a register from a base register plus an immediate mode offset
+    Mlw :: MReg -> Int -> MReg -> MInst
     Msyscall :: MInst
 
 -- | Move into `dest` from `src
@@ -90,6 +109,9 @@ instance MonoFunctor MInst where
     omap f (Mslt r1 r2 r3) = Mslt (f r1) (f r2) (f r3)
     omap f (Mslti r1 r2 i) = Mori (f r1) (f r2) i
     omap f (Mmult r1 r2) = Mmult (f r1) (f r2)
+    omap f (Msw r1 i r2) = Msw (f r1) i (f r2)
+    omap f (Mlw r1 i r2) = Mlw (f r1) i (f r2)
+
     omap _ Msyscall = Msyscall
 
 traverseMInstReg :: Applicative f => (MReg -> f MReg) -> MInst -> f MInst
@@ -101,11 +123,35 @@ traverseMInstReg f (Mori r1 r2 i) = Mori <$> f r1 <*> f r2 <*> pure i
 traverseMInstReg f (Mslt r1 r2 r3) = Mslt <$> f r1 <*> f r2 <*> f r3
 traverseMInstReg f (Mslti r1 r2 i) = Mslti <$> f r1 <*> f r2 <*> pure i
 traverseMInstReg f (Mmult r1 r2) = Mmult <$> f r1 <*> f r2
+traverseMInstReg f (Msw r1 i r2) = Msw <$> f r1 <*> pure i <*> f r2
+traverseMInstReg f (Mlw r1 i r2) = Mlw <$> f r1 <*> pure i <*> f r2
+
 traverseMInstReg f Msyscall = pure Msyscall
 
 mapMInstReg :: (MReg -> MReg) -> MInst -> MInst
 mapMInstReg f inst = runIdentity $ traverseMInstReg (Identity . f) inst
 
+-- | Collect a monoidal value from MReg over an MInst
+foldMapMInstReg :: Monoid m => (MReg -> m) -> MInst -> m
+foldMapMInstReg f inst = execState final Monoid.mempty where
+  -- go :: MReg -> State m MReg
+  go r = do 
+          modify (\m -> m Monoid.<> f r)
+          return r
+
+  -- final :: State m Inst
+  final = (traverseMInstReg go inst)
+
+
+foldlMInstReg :: (seed -> MReg -> seed) -> seed -> MInst -> seed
+foldlMInstReg f seed inst = execState final seed where
+      -- go :: Reg -> State seed Reg
+      go r = do 
+              modify (\seed -> f seed r)
+              return r
+
+      -- final :: State m MInst
+      final = traverseMInstReg go inst 
 
 _prettyMBinOp :: (Pretty a, Pretty b, Pretty c) => 
     String -> a -> b -> c -> PP.Doc doc
@@ -118,7 +164,12 @@ instance Pretty MInst where
     pretty (Mori dest a b) = _prettyMBinOp "ori" dest a b
     pretty (Mslt dest a b) = _prettyMBinOp "slt" dest a b
     pretty (Mslti dest a b) = _prettyMBinOp "slti" dest a b
-    pretty (Mmult a b) = pretty"mult" <+> pretty a <+> pretty b
+    pretty (Mmult a b) = pretty "mult" <+> pretty a <+> pretty b
+    -- | Msw $src 20($s0)
+    pretty (Msw a i b) = pretty "sw" <+> pretty a <+> pretty i PP.<> parens (pretty b)
+    -- | Msw $dest 20($s0)
+    pretty (Mlw a i b) = pretty "lw" <+> pretty a <+> pretty i PP.<> parens (pretty b)
+
     pretty (Msyscall) = pretty "syscall"
 
 data MTerminatorInst =
