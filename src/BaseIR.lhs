@@ -55,6 +55,7 @@ data Program inst ret = Program  {
   programEntryBBId :: (BBId inst ret)
 }
 
+
 deriving instance (Eq inst, Eq ret) =>  Eq (Program inst ret)
 
 instance (Pretty inst, Pretty ret) => Pretty (Program inst ret) where

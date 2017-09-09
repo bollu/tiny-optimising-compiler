@@ -21,8 +21,11 @@ printMIPSAsm,
 traverseMInstReg,
 mapMInstReg,
 foldMapMInstReg,
+getMInstRegs,
 traverseMTerminatorInstReg,
-mapMTerminatorInstReg) where
+mapMTerminatorInstReg,
+MCFG,
+mkMCFG ) where
 import qualified OrderedMap as M
 import Control.Monad.State.Strict
 import Data.Traversable
@@ -35,13 +38,15 @@ import PrettyUtils
 import Data.MonoTraversable
 import Data.Functor.Identity(Identity(..), runIdentity)
 import qualified Data.Monoid as Monoid
+import Graph
+
 
 
 
 type MRegLabel = Label MReg
 
 -- A register for our machine instructions.
-data MReg = MRegVirtual MRegLabel | MRegReal String
+data MReg = MRegVirtual MRegLabel | MRegReal String deriving(Eq, Ord)
 
 
 -- | Convert from a register to a stringified name.
@@ -90,6 +95,7 @@ data MInst where
     Msw :: MReg -> Int -> MReg -> MInst
     -- | Load into a register from a base register plus an immediate mode offset
     Mlw :: MReg -> Int -> MReg -> MInst
+    Mcomment :: String -> MInst
     Msyscall :: MInst
 
 -- | Move into `dest` from `src
@@ -111,6 +117,7 @@ instance MonoFunctor MInst where
     omap f (Mmult r1 r2) = Mmult (f r1) (f r2)
     omap f (Msw r1 i r2) = Msw (f r1) i (f r2)
     omap f (Mlw r1 i r2) = Mlw (f r1) i (f r2)
+    omap _ (Mcomment s) = Mcomment s
 
     omap _ Msyscall = Msyscall
 
@@ -125,7 +132,7 @@ traverseMInstReg f (Mslti r1 r2 i) = Mslti <$> f r1 <*> f r2 <*> pure i
 traverseMInstReg f (Mmult r1 r2) = Mmult <$> f r1 <*> f r2
 traverseMInstReg f (Msw r1 i r2) = Msw <$> f r1 <*> pure i <*> f r2
 traverseMInstReg f (Mlw r1 i r2) = Mlw <$> f r1 <*> pure i <*> f r2
-
+traverseMInstReg _ (Mcomment s) = pure (Mcomment s)
 traverseMInstReg f Msyscall = pure Msyscall
 
 mapMInstReg :: (MReg -> MReg) -> MInst -> MInst
@@ -153,6 +160,10 @@ foldlMInstReg f seed inst = execState final seed where
       -- final :: State m MInst
       final = traverseMInstReg go inst 
 
+-- | Get the list of MRegs in a MInst
+getMInstRegs :: MInst -> [MReg]
+getMInstRegs = foldMapMInstReg (\r -> [r])
+
 _prettyMBinOp :: (Pretty a, Pretty b, Pretty c) => 
     String -> a -> b -> c -> PP.Doc doc
 _prettyMBinOp name a b c = pretty name <+> pretty a <+> pretty b <+> pretty c
@@ -169,7 +180,7 @@ instance Pretty MInst where
     pretty (Msw a i b) = pretty "sw" <+> pretty a <+> pretty i PP.<> parens (pretty b)
     -- | Msw $dest 20($s0)
     pretty (Mlw a i b) = pretty "lw" <+> pretty a <+> pretty i PP.<> parens (pretty b)
-
+    pretty (Mcomment s) = pretty "#" <+> pretty s
     pretty (Msyscall) = pretty "syscall"
 
 data MTerminatorInst =
@@ -203,6 +214,25 @@ type MProgram = Program MInst [MTerminatorInst]
 
 type MLiveRangeBB =  BasicBlock (Int, MInst) (Int, MTerminatorInst)
   
+getTerminatorInstSuccessors :: MTerminatorInst -> [MBBLabel]
+getTerminatorInstSuccessors (Mexit) = []
+getTerminatorInstSuccessors (Mj lbl) = [lbl]
+getTerminatorInstSuccessors (Mbgtz _ lbl) = [lbl]
+getTerminatorInstSuccessors (Mbeqz _ lbl) = [lbl]
+
+-- | Get the successors of this basic block
+getMBBSuccessors :: MBB -> [MBBLabel]
+getMBBSuccessors bb = bbRetInst bb >>= getTerminatorInstSuccessors
+
+
+type MCFG = Graph MBBLabel
+-- | Make a control flow graph
+mkMCFG :: M.OrderedMap MBBLabel MBB -> MCFG
+mkMCFG bbMap = Graph (M.foldMapWithKey makeEdges bbMap)  where
+    makeEdges :: MBBLabel -> MBB -> [(MBBLabel, MBBLabel)]
+    makeEdges bbid bb = map (\succ -> (bbid, succ)) (getMBBSuccessors bb)
+
+
 -- | Print a MIPS program into a Doc. Use this to write it into a file.
 -- | **Do not use pretty**, because it prints the entry BB as well.
 printMIPSAsm :: MProgram -> Doc ()

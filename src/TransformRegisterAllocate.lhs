@@ -5,6 +5,9 @@ module TransformRegisterAllocate where
 import qualified OrderedMap as M
 import TransformMem2Reg (mkCFG, CFG)
 import Control.Monad.State.Strict
+import Control.Monad.Reader
+import Control.Monad.Writer
+
 import Data.Traversable
 import Data.Foldable
 import Control.Applicative
@@ -21,7 +24,7 @@ import MIPSAsm
 import qualified Data.Set as S
 
 nRegisters :: Int
-nRegisters = 8
+nRegisters = 1
 
 bumpCounter :: a -> State Int (Int, a)
 bumpCounter a = do
@@ -166,87 +169,151 @@ assignPhysicalRegisters regmap p =
     assignRealReg r = r
 
 
--- | The worker registers that are available
-spillWorkRegs :: [MReg]
-spillWorkRegs = map mkTemporaryReg [0..7]
+-- | The worker registers that are available. We need to make sure that
+-- | there are at least 2 worker registers.
+spillWorkRegs :: WorkerRegs 
+spillWorkRegs = WorkerRegs . S.fromList $ map mkTemporaryReg [nRegisters..7]
 
-newtype StackOffset = StackOffset Int
+newtype StackOffset = StackOffset { unStackOffset ::  Int }
 
 instance Pretty StackOffset where
     pretty (StackOffset loc) = pretty "stackoffset" PP.<> braces (pretty loc)
 
+
+-- | A structure to represent instructions used to spill registers.
+-- | Has a convenient monoidal structure which we exploit.
+data SpillInsts = SpillInsts {
+    spillInstsPre :: [MInst],
+    spillInstsPost :: [MInst]
+}
+
+instance Monoid SpillInsts where
+    mempty = SpillInsts mempty mempty
+    (SpillInsts pre1 post1) `mappend` (SpillInsts pre2 post2) = 
+        SpillInsts (pre2 ++ pre1) (post1 ++ post2)
+
+
+
+-- | Make a SpillInsts structure that shows how to setup a worker register
+-- | And how to reload the old state.
+mkSpillInsts :: (MReg, StackOffset) -- ^ Real Register to be used for operations with stack offset
+    -> (MReg, StackOffset) -- ^ Register to be spilled with stack offset
+    -> SpillInsts
+mkSpillInsts (real, (StackOffset realso)) (virtual, (StackOffset virtualso))
+    = SpillInsts pre post where
+        pre = [Msw real realso regsp,
+               Mlw real virtualso regsp]
+
+        post = [Msw real virtualso regsp,
+                Mlw real realso regsp]
+
+-- | List of worker registers that are in use. Note that this is dynamic,
+-- | because trying to "legalise" an instruction might grab multiple
+-- | worker registers
+data WorkerRegs = WorkerRegs { getWorkerRegs :: S.Set MReg }
+
+type SpillM a = StateT WorkerRegs (ReaderT SpillContext (Writer SpillInsts)) a
+
+-- | Run a SpillM, given a seed spilling context and a collection of
+-- | available worker registers
+runSpillM :: WorkerRegs -> SpillContext -> SpillM a -> (a, SpillInsts)
+runSpillM workers ctx  spillm = runWriter $ runReaderT (evalStateT spillm workers) ctx
+saveWorkerRegs :: WorkerRegs -> SpillM a -> SpillM a
+saveWorkerRegs workers sa = do
+    -- start with workers
+    put workers
+    a <- sa
+    -- restore workers
+    put workers
+    return a
+
+-- | Get a worker register for a task. Note that this does not
+-- | release the worker register.
+-- | If no worker registers are available, then error out.
+getWorkerReg :: SpillM MReg
+getWorkerReg = do
+    workers <- gets getWorkerRegs
+    if S.null workers
+    then error "there are no worker registers available."
+    else do
+        let cur = S.elemAt 0 workers
+        put $ WorkerRegs (S.deleteAt 0 workers)
+        return cur
+
+-- | Context for spilling
+data SpillContext = SpillContext {
+    spillCtxUncoloredRegs :: S.Set (Label MReg),
+    spillCtxStackOffsets :: M.OrderedMap String StackOffset
+}
+
+mkSpillContext :: [Label MReg] -- ^ Registers to spill
+    -> WorkerRegs -- ^ Worker registers
+    -> SpillContext
+mkSpillContext tospill (WorkerRegs workers) =
+    SpillContext (S.fromList tospill) offsets where
+        offsets :: M.OrderedMap String StackOffset
+        offsets = M.fromList (zip allregs (map StackOffset [0,-4..]))
+
+        allregs :: [String]
+        allregs = map unLabel tospill ++ map regToString (S.toList workers)
+getSpillContextRegOffset :: String -> SpillM StackOffset 
+getSpillContextRegOffset name = asks (\ctx -> (spillCtxStackOffsets ctx) M.! name)
+
+-- | If a register is uncolored, provide the instructions needed to perform
+-- | A correct Spill/Unspill
+spillRegister :: MReg -- ^ Current register
+                -> SpillM MReg
+spillRegister cur@(MRegVirtual lbl) = do
+    isUncolored <- asks (\ctx -> lbl `S.member` (spillCtxUncoloredRegs ctx))
+    if not isUncolored
+    then return cur
+    else do
+        -- | allocate a real register and hold on to it.
+        real <- getWorkerReg
+        realoffset <- getSpillContextRegOffset $ regToString real
+        curoffset <- getSpillContextRegOffset $ regToString cur
+        tell $ mkSpillInsts (real, realoffset) (cur, curoffset)
+        return real
+spillRegister cur = return cur
+
+
 -- | Spill the registers in a given instruction, to create a sequence of
 -- | instructions that spill and restore if needed
-spillInstRegs :: [MReg] -- ^ List of real registers that can be used for computation
-        -> S.Set (Label MReg) -- ^ registers to spill
-        -> M.OrderedMap String StackOffset -- ^ Map from registers to stack offsets (virtual and physical)
-        ->  MInst -> [MInst]
-spillInstRegs realregs allToSpill offsets i =
-        if length curSpill > length realregs
-        then error . docToString $ pretty "This instruction needs more physical registers than available!" <+> pretty i
-        else restoringInsts ++ [mapMInstReg assignRealReg i] ++ spillingInsts
-    where
-        assignRealReg :: MReg -> MReg
-        assignRealReg (MRegVirtual lbl) = curSpillToActive M.! lbl
-        assignRealReg r = r
-         -- | From a register, extract a label if it exists into a Set.
-        extractRegLabel :: MReg -> S.Set (Label MReg)
-        extractRegLabel (MRegVirtual lbl) = S.singleton lbl
-        extractRegLabel _ = mempty
-        -- | Set of registers in the current instruction
-        regsInInst :: S.Set (Label MReg)
-        regsInInst = foldMapMInstReg extractRegLabel i
-        -- | Set of registers to spill
-        curSpill :: S.Set (Label MReg)
-        curSpill = regsInInst `S.intersection` allToSpill
-        -- | A map from registers that need to be spilled, to physical registers
-        -- | that we use to perform their computation
-        curSpillToActive :: M.OrderedMap (Label MReg) MReg
-        curSpillToActive = M.fromList $ zip (S.toList curSpill) realregs
+spillInstRegs :: WorkerRegs -> SpillContext -> MInst -> [MInst]
+spillInstRegs workers ctx inst = preInsts ++ [inst'] ++ postInsts where
+    spiller :: SpillM MInst
+    spiller = ((saveWorkerRegs workers) (traverseMInstReg spillRegister inst))
 
-        -- | Instructions that bring back used values from the stack.
-        -- | Load a `virtual` register that has been spilled onto the stack
-        -- | to a physical work register.
-        restoringInsts :: [MInst]
-        restoringInsts = do
-            rname <- S.toList curSpill
-            let physicalreg = curSpillToActive M.! rname
-            let (StackOffset virtualoffset) = offsets M.! unLabel rname
-            let (StackOffset physicaloffset) = offsets M.! regToString physicalreg
-
-            [Msw physicalreg physicaloffset regsp, -- ^ Store value of register into stack slot
-             Mlw physicalreg virtualoffset regsp] -- ^ Move value from stack slot into physical register]
-        -- | Instructions that spill out our values back to the stack.
-        -- | Restore the original value of the work registers, and store the
-        -- | values of all other registers
-        spillingInsts :: [MInst]
-        spillingInsts = do
-            rname <- S.toList curSpill
-            let physicalreg = curSpillToActive M.! rname
-            let (StackOffset virtualoffset) = offsets M.! unLabel rname
-            let (StackOffset physicaloffset) = offsets M.! regToString physicalreg
-
-            [ Msw physicalreg virtualoffset regsp, -- ^ Store value of register into stack slot
-              Mlw physicalreg physicaloffset  regsp] -- ^ Move value from stack slot into physical register]
+    (inst', SpillInsts preInsts postInsts) = runSpillM workers ctx spiller
 
 
+-- | The SpillM which can spill  the registers in an terminator instruction
+spillerTerminatorInstRegs_ :: WorkerRegs -> MTerminatorInst -> SpillM MTerminatorInst
+spillerTerminatorInstRegs_ workers retinst = 
+    ((saveWorkerRegs workers) (traverseMTerminatorInstReg spillRegister retinst))
 
+-- | Spill registers in a given terminator
+spillTerminatorInstRegs :: MCFG -- ^ control flow graph
+    -> MBBLabel -- ^ current BB id
+    -> MProgram -- ^ program
+    -> MProgram
+spillTerminatorInstRegs cfg curbbid p = p
 
-spillVirtualRegisters :: S.Set (Label MReg) -- ^Names of registers to be spilled 
-    -> MProgram  -- ^ Source program
-    -> MProgram -- ^ Final program
-spillVirtualRegisters toSpill p = 
-    mapProgramBBs (mapBBInstLocus (spillInstRegs spillWorkRegs toSpill offsets)) p where
-        -- | all registers indexed
-        regsIndexed :: [(Int, String)]
-        regsIndexed = zip [0..] (map unLabel (S.toList toSpill) ++ map regToString spillWorkRegs)
+-- | The entry point to spilling code
+spillVirtualRegisters :: [Label MReg] -- ^ Registers to spill
+    -> MProgram -> MProgram
+spillVirtualRegisters tospill p = spillTerminators_ . spillInsts_ $ p where
+    spillTerminators_ :: MProgram -> MProgram
+    spillTerminators_ = id
 
-        -- | Stack offsets of registers that are to be spilled
-        offsets :: M.OrderedMap String StackOffset  
-        offsets = M.fromList $ 
-            map (\(i, reg) -> (reg, StackOffset (i * negate 4))) regsIndexed
+    spillInsts_ :: MProgram -> MProgram
+    spillInsts_ = mapProgramBBs (mapBBInstLocus (spillInstRegs spillWorkRegs spillctx))
 
+    spillctx :: SpillContext
+    spillctx = mkSpillContext tospill spillWorkRegs
 
+    cfg :: MCFG
+    cfg = mkMCFG (programBBMap p)
 
 -- | Construct an interference graph of the given program.
 mkInterferenceGraph :: MProgram -> InterferenceGraph
@@ -286,7 +353,7 @@ transformRegisterAllocate mprogram = trace (docToString $
         physicalAssignedProgram = (assignPhysicalRegisters coloring mprogram)
 
         spilledProgram :: MProgram
-        spilledProgram = spillVirtualRegisters (S.fromList registersToSpill) physicalAssignedProgram
+        spilledProgram = spillVirtualRegisters registersToSpill physicalAssignedProgram
 
         registersToSpill :: [Label MReg]
         registersToSpill = M.foldMapWithKey (\k mColor -> case mColor of 
