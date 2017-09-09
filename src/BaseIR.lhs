@@ -17,7 +17,9 @@ import qualified OrderedMap as M
 import Data.Functor.Identity
 import Data.Traversable
 import qualified Data.Monoid as M
+import Control.Monad
 import Data.Bifunctor
+import PrettyUtils
 
 -- | A label that uses the phantom @a as a type based discriminator
 data Label a = Label { unLabel ::  String } deriving(Eq, Ord, Functor, Foldable, Traversable)
@@ -64,6 +66,26 @@ instance (Pretty inst, Pretty ret) => Pretty (Program inst ret) where
                                             fmap pretty (M.elems bbmap)
 
 
+
+-- | Run an effect at a particular basic block for a program
+traverseProgramAt :: Applicative f => BBId inst ret 
+  -> (BasicBlock inst ret -> f (BasicBlock inst ret))
+  -> Program inst ret ->
+  f (Program inst ret)
+traverseProgramAt bbid f (Program bbmap entryId) =  Program <$> bbmap' <*> pure entryId
+  where
+    bbmap' = (\curbb' -> M.insert bbid curbb' bbmap) <$> (f curbb)
+    curbb = case M.lookup bbid bbmap of
+              Just bb -> bb
+              Nothing -> error . docToString $ pretty "unable to find bbid in program: " <+> pretty bbid
+
+
+mapProgramAt :: BBId inst ret -> (BasicBlock inst ret -> BasicBlock inst ret)
+  -> Program inst ret -> Program inst ret
+mapProgramAt bbid f p = runIdentity $ 
+  traverseProgramAt bbid (Identity . f) p
+
+
 -- | Map an effect over all the BBs of the Program
 traverseProgramBBs :: Applicative f =>
   (BasicBlock inst ret -> f (BasicBlock inst' ret'))
@@ -82,6 +104,11 @@ mapProgramBBs :: (BasicBlock inst ret -> BasicBlock inst' ret')
   -> Program inst ret
   -> Program inst' ret'
 mapProgramBBs fbb program = runIdentity $ traverseProgramBBs (Identity . fbb) program
+
+-- | Run a monadic effect over the basic blocks throwing away the results
+mapMProgramBBs_ :: Monad m => (BasicBlock inst ret -> m ()) -> Program inst ret -> m ()
+mapMProgramBBs_ fbb (Program bbmap _) = forM_ bbmap fbb
+
 
 -- | Collect results from basic blocks which can be monoidally smashed.
 foldMapProgramBBs :: Monoid m =>
@@ -111,10 +138,16 @@ traverseBB finst fretinst (BasicBlock insts retinst lbl) =
         retinst' = fretinst retinst
         insts' = for insts finst
 
+-- | Run an effect over a basic block throwing away the results
+mapMBB_ :: Monad f => (inst -> f ()) -> (ret -> f ()) -> BasicBlock inst ret -> f ()
+mapMBB_ finst fretinst (BasicBlock insts retinst lbl) = do
+    for insts finst
+    fretinst retinst
 
-weaveEffect :: (Traversable f, Applicative f, Monad t, Traversable t) => (a -> f (t b))
+
+weaveEffect_ :: (Traversable f, Applicative f, Monad t, Traversable t) => (a -> f (t b))
   -> t a -> f (t b)
-weaveEffect f as = join <$> intermediate -- f (t t b)
+weaveEffect_ f as = join <$> intermediate -- f (t t b)
   where
     intermediate = for as f
     -- join :: t (t b) -> t b
@@ -130,7 +163,7 @@ traverseBBInstLocus :: (Applicative f, Traversable f) =>
 traverseBBInstLocus finst (BasicBlock insts retinst lbl) =
 
     BasicBlock <$> insts'<*> pure retinst <*> pure (unsafeTransmuteLabel lbl) where
-      insts' = weaveEffect finst insts
+      insts' = weaveEffect_ finst insts
 
 
 mapBBInstLocus :: (inst -> [inst']) -> BasicBlock inst ret -> BasicBlock inst' ret
@@ -162,6 +195,17 @@ mapBB :: (inst -> inst')
           -> BasicBlock inst' ret'
 mapBB finst fretinst bb =
     runIdentity $ traverseBB (Identity . finst) (Identity . fretinst) bb
+
+
+-- | Insert instructions before the first instruction in a bb.
+insertInstsBeginBB :: [inst] -> BasicBlock inst ret -> BasicBlock inst ret
+insertInstsBeginBB pre (BasicBlock insts retinst lbl) =
+  BasicBlock (pre++insts) retinst lbl
+
+-- | Insert instructions at the end of the last instruction in a bb.
+insertInstsEndBB :: [inst] -> BasicBlock inst ret -> BasicBlock inst ret
+insertInstsEndBB post (BasicBlock insts retinst lbl) =
+  BasicBlock (insts++post) retinst lbl
 
 
 \end{code}

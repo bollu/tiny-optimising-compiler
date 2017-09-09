@@ -206,13 +206,23 @@ runSpillM workers ctx  spillm = runWriter $ runReaderT (evalStateT spillm worker
 -- | Has a convenient monoidal structure which we exploit.
 data SpillingInsts = SpillingInsts {
     spillInstsPre :: [MInst],
-    spillInstsPost :: [MInst]
+    spillInstsPost :: M.OrderedMap MBBLabel [MInst]
 }
 
 instance Monoid SpillingInsts where
     mempty = SpillingInsts mempty mempty
+    
     (SpillingInsts pre1 post1) `mappend` (SpillingInsts pre2 post2) = 
-        SpillingInsts (pre2 ++ pre1) (post1 ++ post2)
+        SpillingInsts (pre2 ++ pre1) post'
+
+        where
+            postFuser :: M.OrderedMap MBBLabel [MInst]
+                -> (MBBLabel, [MInst])
+                -> M.OrderedMap MBBLabel [MInst]
+            postFuser m (bbid, insts) = M.insertWith (++) bbid insts m
+
+            post' :: M.OrderedMap MBBLabel [MInst]
+            post' = foldl postFuser post1 (M.toList post2)
 
 -- | Helper newtype to clearly denote stack offsets
 newtype StackOffset = StackOffset { unStackOffset ::  Int }
@@ -228,16 +238,24 @@ gSpillWorkRegs = WorkerRegs . S.fromList $ map mkTemporaryReg [nRegisters..7]
 
 -- | Make a SpillingInsts structure that shows how to setup a worker register
 -- | And how to reload the old state.
-mkSpillingInsts :: (MReg, StackOffset) -- ^ Real Register to be used for operations with stack offset
+mkSpillingInsts :: Maybe MBBLabel -- ^ Label of the basic block to which the "post" instructions should go to. Can be empty if not needed
+    -> (MReg, StackOffset) -- ^ Real Register to be used for operations with stack offset
     -> (MReg, StackOffset) -- ^ Register to be spilled with stack offset
     -> SpillingInsts
-mkSpillingInsts (real, (StackOffset realso)) (virtual, (StackOffset virtualso))
+mkSpillingInsts mCurbbid (real, (StackOffset realso)) (virtual, (StackOffset virtualso))
     = SpillingInsts pre post where
+        pre :: [MInst]
         pre = [Msw real realso regsp,
                Mlw real virtualso regsp]
 
-        post = [Msw real virtualso regsp,
-                Mlw real realso regsp]
+        post :: M.OrderedMap MBBLabel [MInst]
+        post = case mCurbbid of
+                Just curbbid -> M.fromList $ [(curbbid, postInsts)]
+                Nothing -> mempty
+
+        postInsts :: [MInst]
+        postInsts = [Msw real virtualso regsp,
+                     Mlw real realso regsp]
 
 
 -- | Get a worker register for a task. Note that this does not
@@ -259,9 +277,10 @@ getRegOffset name = asks (\ctx -> (spillCtxStackOffsets ctx) M.! name)
 
 -- | If a register is uncolored, provide the instructions needed to perform
 -- | A correct Spill/Unspill
-spillReg :: MReg -- ^ Current register
+spillReg :: Maybe MBBLabel -- ^ BB to which post instructions should go to.
+            -> MReg -- ^ Current register
             -> SpillM MReg
-spillReg cur@(MRegVirtual lbl) = do
+spillReg mCurbbid cur@(MRegVirtual lbl) = do
     isUncolored <- asks (\ctx -> lbl `S.member` (spillCtxUncoloredRegs ctx))
     if not isUncolored
     then return cur
@@ -270,29 +289,107 @@ spillReg cur@(MRegVirtual lbl) = do
         real <- getWorkerReg
         realoffset <- getRegOffset $ regToString real
         curoffset <- getRegOffset $ regToString cur
-        tell $ mkSpillingInsts (real, realoffset) (cur, curoffset)
+        tell $ mkSpillingInsts mCurbbid (real, realoffset) (cur, curoffset)
         return real
-spillReg cur = return cur
+spillReg _ cur = return cur
 
 
 -- | Spill the registers in a given instruction, to create a sequence of
 -- | instructions that spill and restore if needed
-spillInst :: WorkerRegs -> SpillContext -> MInst -> [MInst]
-spillInst workers ctx inst = preInsts ++ [inst'] ++ postInsts where
+-- | TODO: consider if WorkerRegs can be folded into SpillContext somehow.
+spillInst :: MBBLabel -> WorkerRegs -> SpillContext -> MInst -> [MInst]
+spillInst curbbid workers ctx inst = preInsts ++ [inst'] ++ postInsts where
     spiller :: SpillM MInst
-    spiller = traverseMInstReg spillReg inst
+    spiller = traverseMInstReg (spillReg (Just curbbid)) inst
 
-    (inst', SpillingInsts preInsts postInsts) = runSpillM workers ctx spiller
+    (inst', SpillingInsts preInsts postInstsMap) = runSpillM workers ctx spiller
+
+    postInsts :: [MInst]
+    postInsts = case M.lookup curbbid postInstsMap of
+                    Just post -> post
+                    Nothing -> []
+
+-- | A spiller (frozen SpillM) for a terminator inst. This creates the
+-- | spill code to load variables from memory, and generates post spill code
+-- | in the succeeding basic block if need be.
+-- | Note that this is not _fully_ correct, because it is possible that some
+-- | sequence of original return instructions:
+-- |
+-- | term1
+-- | term2
+-- | 
+-- | May need to be lowered into:
+-- | <pre term1>
+-- | term1
+-- | <post term1>
+-- | <pre term2>
+-- | term2
+-- | <post term2>
+-- | However, since in our case, term2 is always some sort of unconditional jump,
+-- | <pre term2> is always empty. Hence, we can thank our lucky stars.
+spillerTerminatorInst_ :: MTerminatorInst -> SpillM MTerminatorInst
+spillerTerminatorInst_ terminator = do
+    -- | get the worker registers
+    workers <- get
+    let mSuccessor = getTerminatorInstSuccessor terminator
+    terminator' <- (traverseMTerminatorInstReg (spillReg mSuccessor) terminator)
+    -- | Restore worker registers.
+    put workers
+    return terminator'
+
+spillTerminatorInst :: MBBLabel -- ^ Current basic block ID
+    -> WorkerRegs -- ^ worker registers that are available for spilling.
+    -> SpillContext -- ^ ambient spilling context that has info about colors of registers
+    -> MTerminatorInst -- ^ Terminator instruction in consideration
+    -> MProgram -- ^ Current program state
+    -> MProgram -- ^ next program state
+spillTerminatorInst curbbid workers ctx term p = fullTransform p
+
+    where
+        -- | Get the list of 
+        (term', SpillingInsts preInsts postInstsMap) = runSpillM workers ctx (spillerTerminatorInst_ term)
+
+        -- | insert instructions into current bb
+        insertCur :: MProgram -> MProgram
+        insertCur = mapProgramAt curbbid (insertInstsEndBB preInsts)
+
+        -- | replace the terminator inst. TODO: this is shaky, we should ideally number the BB so we know exactly 
+        -- | which terminator we are editing. For now, we rely on the fact that in a BB, no two terminators will look the same.
+        replaceTerminator :: MProgram -> MProgram
+        replaceTerminator = mapProgramAt curbbid (mapBB id (map (\ri -> if ri == term then term' else ri)))
+
+        -- | insert instructions into a successor basic block
+        insertPost :: MBBLabel -> [MInst] -> MProgram -> MProgram
+        insertPost nextbbid post = mapProgramAt curbbid (insertInstsBeginBB post)
+
+        -- | list of functions that will insert instructions into successor basic block
+        postInserters :: [MProgram -> MProgram]
+        postInserters = map (\(bbid, insts) -> insertPost bbid insts) (M.toList postInstsMap)
+
+        -- | final function that will perform full spilling
+        -- | TODO: rewrite with Endo?
+        fullTransform :: MProgram -> MProgram
+        fullTransform = foldl (.) id (replaceTerminator:insertCur:postInserters)
+
+
+
+
+spillTerminatorInstSt :: MBBLabel -> WorkerRegs -> SpillContext -> MTerminatorInst -> State MProgram ()
+spillTerminatorInstSt curbbid workers ctx term =
+    modify (spillTerminatorInst curbbid workers ctx term)
 
 -- | The entry point to spilling code
 spillEntryPoint :: [Label MReg] -- ^ Registers to spill
     -> MProgram -> MProgram
-spillEntryPoint tospill p = spillTerminators_ . spillInsts_ $ p where
+spillEntryPoint tospill p = spillTerminators_ . spillInsts_ $ p where    
+    spillTerminatorsSt :: State MProgram ()
+    spillTerminatorsSt = mapMProgramBBs_ (\bb -> mapMBB_ (const (return ()))
+                                            (\retinsts -> forM_ retinsts (spillTerminatorInstSt (bbLabel bb) gSpillWorkRegs spillctx)) bb) p
     spillTerminators_ :: MProgram -> MProgram
-    spillTerminators_ = id
+    spillTerminators_ = execState spillTerminatorsSt
 
     spillInsts_ :: MProgram -> MProgram
-    spillInsts_ = mapProgramBBs (mapBBInstLocus (spillInst gSpillWorkRegs spillctx))
+    spillInsts_ = mapProgramBBs (\bb -> mapBBInstLocus (spillInst (bbLabel bb) gSpillWorkRegs spillctx) bb)
 
     spillctx :: SpillContext
     spillctx = mkSpillContext tospill gSpillWorkRegs

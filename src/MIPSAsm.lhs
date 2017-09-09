@@ -24,6 +24,7 @@ foldMapMInstReg,
 getMInstRegs,
 traverseMTerminatorInstReg,
 mapMTerminatorInstReg,
+getTerminatorInstSuccessor,
 MCFG,
 mkMCFG ) where
 import qualified OrderedMap as M
@@ -39,7 +40,7 @@ import Data.MonoTraversable
 import Data.Functor.Identity(Identity(..), runIdentity)
 import qualified Data.Monoid as Monoid
 import Graph
-
+import Data.Maybe(maybeToList)
 
 
 
@@ -187,7 +188,7 @@ data MTerminatorInst =
     Mexit | 
     Mj MBBLabel |
     Mbeqz MReg  MBBLabel |
-    Mbgtz MReg MBBLabel
+    Mbgtz MReg MBBLabel deriving (Eq, Ord)
 
 instance Pretty MTerminatorInst where
     pretty (Mexit) = pretty "# <exit>"
@@ -214,15 +215,16 @@ type MProgram = Program MInst [MTerminatorInst]
 
 type MLiveRangeBB =  BasicBlock (Int, MInst) (Int, MTerminatorInst)
   
-getTerminatorInstSuccessors :: MTerminatorInst -> [MBBLabel]
-getTerminatorInstSuccessors (Mexit) = []
-getTerminatorInstSuccessors (Mj lbl) = [lbl]
-getTerminatorInstSuccessors (Mbgtz _ lbl) = [lbl]
-getTerminatorInstSuccessors (Mbeqz _ lbl) = [lbl]
+-- | Get the possible successor this terminator instruction will lead to.
+getTerminatorInstSuccessor :: MTerminatorInst -> Maybe MBBLabel
+getTerminatorInstSuccessor (Mexit) = Nothing
+getTerminatorInstSuccessor (Mj lbl) = Just lbl
+getTerminatorInstSuccessor (Mbgtz _ lbl) = Just lbl
+getTerminatorInstSuccessor (Mbeqz _ lbl) = Just lbl
 
 -- | Get the successors of this basic block
 getMBBSuccessors :: MBB -> [MBBLabel]
-getMBBSuccessors bb = bbRetInst bb >>= getTerminatorInstSuccessors
+getMBBSuccessors bb = bbRetInst bb >>= maybeToList . getTerminatorInstSuccessor
 
 
 type MCFG = Graph MBBLabel
