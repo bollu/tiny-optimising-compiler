@@ -10,6 +10,7 @@ import System.IO
 import System.Environment
 import TransformMem2Reg
 import TransformConstantFolding
+import SCEV
 import TransformIRToMIPS
 import PrettyUtils
 import MIPSInterpreter

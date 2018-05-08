@@ -22,6 +22,8 @@ module TransformMem2Reg(constructDominatorTree,
     constructBBDominators,
     getAllChildren,
     getDominanceFrontier,
+    DomTree,
+    BBIdToDomSet,
     transformMem2Reg) where
 
 import IR

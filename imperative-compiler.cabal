@@ -56,6 +56,7 @@ executable imperative-compiler
                  BaseIR,
                  ProgramToIR,
                  TransformMem2Reg,
+                 SCEV, 
                  PrettyUtils,
                  OrderedMap,
                  IRInterpreter,
@@ -138,6 +139,7 @@ test-suite test
                        , TransformMem2Reg
                        , TransformIRToMIPS
                        , TransformRegisterAllocate
+                       , SCEV
                        , Graph
                        , TransformConstantFolding
   default-language:    Haskell2010
