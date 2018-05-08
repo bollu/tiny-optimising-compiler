@@ -31,6 +31,10 @@ instance Pretty a => Pretty (Graph a) where
     vcat [pretty "BB graph edges",
           (vcat . map (indent 4 . pretty) . edges $ graph)]
 
+-- | returns all edges (H -> T) with a given source H
+getEdgesFromSource :: Eq a => Graph a -> a -> [(a, a)]
+getEdgesFromSource g src = [(src, b) | (a, b) <- edges g, a == src]
+
 -- | return predecessors of a node
 getPredecessors :: Eq a => Graph a -> a -> [a]
 getPredecessors g bbid = [ src | (src, sink) <- (edges g), sink == bbid]
