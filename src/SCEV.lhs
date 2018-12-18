@@ -18,7 +18,9 @@ http://web.cs.wpi.edu/~kal/PLT/PLT8.6.4.html
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module SCEV(analyzeSCEV) where
+{-# LANGUAGE DeriveFunctor #-}
+
+module SCEV(analyzeSCEV, detectLoops) where
 
 import IR
 import BaseIR
@@ -38,8 +40,19 @@ import Graph
 
 data Loop = Loop {
     loopHeader :: IRBBId,
+    loopBackEdges :: [(IRBBId, IRBBId)],
     loopLatches :: [IRBBId]
-}
+} 
+
+instance Pretty Loop where
+  pretty Loop{..} = 
+      vsep [pheader, nest 4 platch, nest 4 pbackedges] where
+      pheader = (pretty "header:") <+> (pretty loopHeader)
+      platch =  vcat [pretty  "latches:",
+                      nest 4 (vcat (fmap (pretty) loopLatches))]
+      pbackedges = vcat [pretty "backedges:",
+                         nest 4 $ vcat (fmap pretty loopBackEdges)]
+
 
 -- | Returns if the given edge is a back-edge
 -- | An edge (Start -> End) is a back edge if End dominates Start
@@ -76,7 +89,8 @@ _detectLoopsRec bbmap bbIdToDomSet domtree cfg curbbid =
               then []
               else [Loop {
                 loopHeader=curbbid,
-                loopLatches= map fst backedges
+                loopLatches= map fst backedges,
+                loopBackEdges=backedges
               }]
 
 
@@ -95,15 +109,10 @@ detectLoops program@Program{programBBMap=bbmap,
     cfg = mkCFG bbmap
  
 
-data SCEVType = Add | Mul
+-- | Chain of recurrences.
+data SCEV = SCEV
 
-data SCEV = SCEV {
-  scevType :: SCEVType,
-  scevInit :: SCEV,
-  scevRec :: SCEV
-}
-
-type SCEVMap = M.OrderedMap (Label Inst) (SCEV)
+type SCEVMap = M.OrderedMap (Label Inst) SCEV
  
 
 analyzeSCEV :: IRProgram -> SCEVMap

@@ -7,6 +7,7 @@ import qualified Language as Lang
 import Data.Text.Prettyprint.Doc
 import ProgramToIR
 import System.IO
+import System.Exit (exitSuccess)
 import System.Environment
 import TransformMem2Reg
 import TransformConstantFolding
@@ -53,6 +54,12 @@ main = do
 
             let irprogram = programToIR program
             finalProgram <- runPasses pipeline irprogram
+
+            putStrLn "*** Loops ***"
+            let loops = detectLoops finalProgram
+            putStrLn . docToString . vcat . (fmap pretty) $ loops
+
+            exitSuccess
 
             putStrLn "*** MIPS assembly *** "
             let mipsasm = transformRegisterAllocate . transformIRToMIPS $ finalProgram
