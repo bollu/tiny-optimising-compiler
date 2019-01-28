@@ -54,15 +54,40 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span>
 <span class="kw">import </span><span class="dt">ProgramToIR</span>
 <span class="kw">import </span><span class="dt">System.IO</span>
+<span class="kw">import </span><span class="dt">System.Exit</span> (exitSuccess)
 <span class="kw">import </span><span class="dt">System.Environment</span>
 <span class="kw">import </span><span class="dt">TransformMem2Reg</span>
+<span class="kw">import </span><span class="dt">TransformConstantFolding</span>
+<span class="kw">import </span><span class="dt">SCEV</span>
+<span class="kw">import </span><span class="dt">TransformIRToMIPS</span>
 <span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">MIPSInterpreter</span>
+<span class="kw">import </span><span class="dt">TransformRegisterAllocate</span>
 <span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
 <span class="kw">import qualified</span> <span class="dt">MIPSAsm</span> <span class="kw">as</span> <span class="dt">MIPS</span>
 
 
 <span class="ot">compileProgram ::</span> <span class="dt">Lang.Program</span> a <span class="ot">-&gt;</span>  <span class="dt">IR.IRProgram</span>
 compileProgram p <span class="fu">=</span> undefined
+
+<span class="ot">pipeline ::</span> [(<span class="dt">String</span>, <span class="dt">IR.IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IR.IRProgram</span>)]
+pipeline <span class="fu">=</span> [(<span class="st">&quot;original&quot;</span>, id),
+            (<span class="st">&quot;mem2reg&quot;</span>, transformMem2Reg),
+            (<span class="st">&quot;constant fold&quot;</span>, transformConstantFold)]
+
+<span class="ot">runPasses ::</span> [(<span class="dt">String</span>, <span class="dt">IR.IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IR.IRProgram</span>)] <span class="co">-- ^ Pass pipeline</span>
+    <span class="ot">-&gt;</span> <span class="dt">IR.IRProgram</span> <span class="co">-- ^ Current program </span>
+    <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">IR.IRProgram</span> <span class="co">-- ^ Final program</span>
+runPasses [] p <span class="fu">=</span> return p
+runPasses ((name, pass)<span class="fu">:</span>passes) p <span class="fu">=</span> <span class="kw">do</span>
+    <span class="kw">let</span> p&#39; <span class="fu">=</span> pass p
+    putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;#  Running pass &quot;</span> <span class="fu">&lt;+&gt;</span> 
+                             pretty name
+    putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span> p&#39;
+    putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;- Value:&quot;</span> <span class="fu">&lt;+&gt;</span> pretty (runProgram p&#39;)
+    runPasses passes p&#39;
+
+
 
 <span class="ot">main ::</span> <span class="dt">IO</span> ()
 main <span class="fu">=</span> <span class="kw">do</span>
@@ -74,37 +99,24 @@ main <span class="fu">=</span> <span class="kw">do</span>
             putStrLn <span class="st">&quot;*** Program:&quot;</span>
             putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span>  program
 
-            putStrLn <span class="st">&quot;*** IR:&quot;</span>
-            <span class="kw">let</span> irprogram <span class="fu">=</span>  programToIR program
-            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span> irprogram
+            <span class="kw">let</span> irprogram <span class="fu">=</span> programToIR program
+            finalProgram <span class="ot">&lt;-</span> runPasses pipeline irprogram
 
-            <span class="kw">let</span> cfg <span class="fu">=</span> mkBBGraph <span class="fu">.</span> IR.irProgramBBMap <span class="fu">$</span><span class="ot"> irprogram ::</span> <span class="dt">CFG</span>
+            putStrLn <span class="st">&quot;*** Loops ***&quot;</span>
+            <span class="kw">let</span> loops <span class="fu">=</span> detectLoops finalProgram
+            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> vcat <span class="fu">.</span> (fmap pretty) <span class="fu">$</span> loops
 
-            putStrLn <span class="st">&quot;*** Dom info:&quot;</span>
-            <span class="kw">let</span> dominatorInfo <span class="fu">=</span> constructBBDominators irprogram
-            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> pretty <span class="fu">$</span> dominatorInfo
-
-            putStrLn <span class="st">&quot;*** Dominator tree: &quot;</span>
-            <span class="kw">let</span> dominatorTree <span class="fu">=</span> constructDominatorTree dominatorInfo (IR.irProgramEntryBBId irprogram)
-            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span> dominatorTree
-
-            putStrLn <span class="st">&quot;*** Dominance Frontiers: &quot;</span>
-            <span class="kw">let</span> domfrontiers <span class="fu">=</span> fmap (\bbid <span class="ot">-&gt;</span> (bbid, getDominanceFrontier dominatorTree cfg bbid))
-                                    (M.keys <span class="fu">.</span> IR.irProgramBBMap <span class="fu">$</span> irprogram)<span class="ot"> ::</span> [(<span class="dt">IR.BBId</span>, [<span class="dt">IR.BBId</span>])]
-            putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> vcat (fmap pretty domfrontiers)
-
-
-            putStrLn <span class="st">&quot;*** Mem2Reg ***&quot;</span>
-            <span class="kw">let</span> mem2regprog <span class="fu">=</span> transformMem2Reg irprogram
-            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">$</span>  mem2regprog
-
-            putStrLn <span class="st">&quot;*** Original program value ***&quot;</span>
-            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">.</span> runProgram <span class="fu">$</span> irprogram
-
-            putStrLn <span class="st">&quot;*** Mem2Reg program value ***&quot;</span>
-            putStrLn <span class="fu">.</span> prettyableToString <span class="fu">.</span> runProgram <span class="fu">$</span> mem2regprog
+            exitSuccess
 
             putStrLn <span class="st">&quot;*** MIPS assembly *** &quot;</span>
-            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> MIPS.unASMDoc <span class="fu">.</span> MIPS.generateASM <span class="fu">$</span>  mem2regprog</code></pre></div>
+            <span class="kw">let</span> mipsasm <span class="fu">=</span> transformRegisterAllocate <span class="fu">.</span> transformIRToMIPS <span class="fu">$</span> finalProgram
+            putStrLn <span class="fu">.</span> docToString <span class="fu">.</span> MIPS.printMIPSAsm <span class="fu">$</span> mipsasm
+            <span class="co">-- putStrLn . docToString . MIPS.unASMDoc . MIPS.generateASM $  finalProgram</span>
+
+            putStrLn <span class="st">&quot;*** Output from SPIM *** &quot;</span>
+            mProgramOutput <span class="ot">&lt;-</span> interpretMIPSWithSPIM mipsasm
+            <span class="kw">case</span> mProgramOutput <span class="kw">of</span>
+                <span class="dt">Left</span> err <span class="ot">-&gt;</span> putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> err
+                <span class="dt">Right</span> val <span class="ot">-&gt;</span> putStrLn <span class="fu">.</span> docToString <span class="fu">$</span> (pretty <span class="st">&quot;final value: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty val)</code></pre></div>
 </body>
 </html>

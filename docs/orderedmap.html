@@ -61,6 +61,7 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
   elems,
   toList,
   keys,
+  editKeys,
   (<span class="fu">!</span>),
   union,
   fromListWith,
@@ -70,6 +71,8 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
   OrderedMap.lookup,
   delete) <span class="kw">where</span>
 <span class="kw">import qualified</span> <span class="dt">Data.Map.Strict</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>(liftA2)
+<span class="kw">import qualified</span> <span class="dt">Control.Arrow</span> <span class="kw">as</span> <span class="dt">A</span>
 <span class="kw">import </span><span class="dt">Data.Monoid</span>
 <span class="kw">import </span><span class="dt">PrettyUtils</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span>
@@ -77,7 +80,13 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 
 <span class="co">-- At some point, I need this. This is more convenient than overloading the key to store the insertion time.</span>
 <span class="co">-- | A dictionary that orders elements by insertion time</span>
-<span class="kw">data</span> <span class="dt">OrderedMap</span> k v <span class="fu">=</span> <span class="dt">OrderedMap</span> {<span class="ot"> map&#39; ::</span> <span class="dt">M.Map</span> k v,<span class="ot"> order ::</span> [k] } <span class="kw">deriving</span>(<span class="dt">Show</span>, <span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>, <span class="dt">Eq</span>)
+<span class="kw">data</span> <span class="dt">OrderedMap</span> k v <span class="fu">=</span> <span class="dt">OrderedMap</span> {<span class="ot"> map&#39; ::</span> <span class="dt">M.Map</span> k v,<span class="ot"> order ::</span> [k] } <span class="kw">deriving</span>(<span class="dt">Show</span>, <span class="dt">Functor</span>, <span class="dt">Eq</span>)
+
+<span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k) <span class="ot">=&gt;</span> <span class="dt">Foldable</span> (<span class="dt">OrderedMap</span> k) <span class="kw">where</span>
+ foldMap f omap <span class="fu">=</span> foldMap f (map snd <span class="fu">.</span> toList <span class="fu">$</span> omap)
+
+<span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k) <span class="ot">=&gt;</span> <span class="dt">Traversable</span> (<span class="dt">OrderedMap</span> k) <span class="kw">where</span>
+ traverse f omap <span class="fu">=</span> fmap fromList (traverse ((\(k, v) <span class="ot">-&gt;</span> liftA2 (,) (pure k) (f v)))  (toList omap))
 
 <span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">OrderedMap</span> k v) <span class="kw">where</span>
   pretty (<span class="dt">OrderedMap</span> _ []) <span class="fu">=</span> pretty <span class="st">&quot;empty map&quot;</span>
@@ -127,14 +136,11 @@ size <span class="fu">=</span> liftMapExtract_ M.size
 <span class="ot">keys ::</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [k]
 keys  <span class="fu">=</span> order
 
-<span class="ot">index_ ::</span> (<span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a, <span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> a
+<span class="ot">index_ ::</span> (<span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> a
 index_ omap k <span class="fu">=</span> <span class="kw">case</span> OrderedMap.lookup k omap <span class="kw">of</span>
             <span class="dt">Just</span> a <span class="ot">-&gt;</span> a
             <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
-                         vcat [pretty <span class="st">&quot;Omap is in inconstent state. Indexing at key:&quot;</span>
-                              , pretty k
-                              , pretty <span class="st">&quot;omap: &quot;</span>
-                              , pretty omap]
+                         vcat [pretty <span class="st">&quot;Omap is in inconstent state.&quot;</span>]
 
 <span class="ot">elems ::</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [a]
 elems omap <span class="fu">=</span> map (index_ omap) (keys omap) <span class="kw">where</span>
@@ -144,7 +150,7 @@ union (<span class="dt">OrderedMap</span>{order<span class="fu">=</span>o1, map&
   <span class="dt">OrderedMap</span>{map&#39;<span class="fu">=</span>m1 <span class="ot">`M.union`</span> m2, order<span class="fu">=</span>L.nub(o1<span class="fu">++</span>o2)}
 
 <span class="co">-- | Return the list of key value pairs in the order of insertion.</span>
-<span class="ot">toList ::</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> a) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [(k, a)]
+<span class="ot">toList ::</span> (<span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> [(k, a)]
 toList omap <span class="fu">=</span> map (\k <span class="ot">-&gt;</span> (k, index_ omap k)) (keys omap)
 
 <span class="ot">adjust ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
@@ -174,6 +180,11 @@ foldlWithKey f a <span class="fu">=</span> liftMapExtract_ (M.foldlWithKey f a)
 
 <span class="ot">mapWithKey ::</span> (k <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k b
 mapWithKey f <span class="fu">=</span> liftMapEdit_ (M.mapWithKey f)
+
+<span class="co">-- | Change the keys of the map, without changing the order.</span>
+<span class="ot">editKeys ::</span> (<span class="dt">Ord</span> k, <span class="dt">Ord</span> k&#39;) <span class="ot">=&gt;</span> (k <span class="ot">-&gt;</span> k&#39;) <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k&#39; a
+editKeys f <span class="fu">=</span> fromList <span class="fu">.</span> map (f <span class="fu">A.***</span> id) <span class="fu">.</span> toList
+
 
 <span class="ot">delete ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span>  k <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a <span class="ot">-&gt;</span> <span class="dt">OrderedMap</span> k a
 delete key omap<span class="fu">@</span><span class="dt">OrderedMap</span>{<span class="fu">..</span>} <span class="fu">=</span> <span class="dt">OrderedMap</span> {order<span class="fu">=</span>L.delete key order, map&#39;<span class="fu">=</span>M.delete key map&#39; }</code></pre></div>

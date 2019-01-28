@@ -49,6 +49,7 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 <div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">ProgramToIR</span> <span class="kw">where</span>
 <span class="kw">import </span><span class="dt">Language</span>
 <span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
 <span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
 <span class="kw">import </span><span class="dt">Data.Traversable</span>
 <span class="kw">import </span><span class="dt">Data.Foldable</span>
@@ -59,11 +60,11 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 
 <span class="kw">data</span> <span class="dt">Builder</span> <span class="fu">=</span> <span class="dt">Builder</span> {
   <span class="co">-- | The first BB that is present in the module</span>
-<span class="ot">  entryBBId ::</span> <span class="dt">BBId</span>,
+<span class="ot">  entryBBId ::</span> <span class="dt">IRBBId</span>,
  <span class="co">-- | The BB the builder is currently focused on</span>
-<span class="ot">  currentBBId ::</span> <span class="dt">BBId</span>,
-  <span class="co">-- | Mapping from BBId to BasicBlock</span>
-<span class="ot">  bbIdToBB ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>,
+<span class="ot">  currentBBId ::</span> <span class="dt">IRBBId</span>,
+  <span class="co">-- | Mapping from BBId to IRBB</span>
+<span class="ot">  bbIdToBB ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">IRBBId</span> <span class="dt">IRBB</span>,
   <span class="co">-- | counter to generate new instruction name</span>
 <span class="ot">  tmpInstNamesCounter ::</span> <span class="dt">Int</span>,
   <span class="co">-- | Map from name to count of number of times name has occured</span>
@@ -93,20 +94,20 @@ newBuilder <span class="fu">=</span>
     })
 
 <span class="co">-- | Get the current Basic block ID</span>
-<span class="ot">getCurrentBBId ::</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">BBId</span>
+<span class="ot">getCurrentBBId ::</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">IRBBId</span>
 getCurrentBBId <span class="fu">=</span> gets currentBBId
 
 <span class="co">-- | Focus the basic block given by the ID</span>
-<span class="ot">focusBB ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
+<span class="ot">focusBB ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
 focusBB id <span class="fu">=</span> modify (\b<span class="ot">-&gt;</span> b { currentBBId<span class="fu">=</span>id })
 
 <span class="co">-- | Append a new basic block. DOES NOT switch the currentBBId to the new basic block. For that, see focusBB</span>
-<span class="ot">createNewBB ::</span> <span class="dt">Label</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">BBId</span>
+<span class="ot">createNewBB ::</span> <span class="dt">Label</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> <span class="dt">IRBBId</span>
 createNewBB name <span class="fu">=</span> <span class="kw">do</span>
   idtobbs <span class="ot">&lt;-</span> gets bbIdToBB
   <span class="kw">let</span> nbbs <span class="fu">=</span> M.size idtobbs
   <span class="kw">let</span> nameunique <span class="fu">=</span> <span class="dt">Label</span> ((unLabel name) <span class="fu">++</span> <span class="st">&quot;.&quot;</span> <span class="fu">++</span> show nbbs)
-  <span class="kw">let</span> newbb <span class="fu">=</span> defaultBB { bbLabel<span class="fu">=</span>nameunique }
+  <span class="kw">let</span> newbb <span class="fu">=</span> defaultIRBB { bbLabel<span class="fu">=</span>nameunique }
   modify (\b <span class="ot">-&gt;</span> b { bbIdToBB <span class="fu">=</span> M.insert nameunique newbb idtobbs  } )
   return nameunique
 
@@ -155,13 +156,13 @@ getLiteralValueMapping lit <span class="fu">=</span> <span class="kw">do</span>
 
 <span class="co">-- | lift an edit of a basic block to the current basic block focused</span>
 <span class="co">-- | in the Builder.</span>
-<span class="ot">liftBBEdit ::</span> (<span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>) <span class="ot">-&gt;</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
+<span class="ot">liftBBEdit ::</span> (<span class="dt">IRBB</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span>) <span class="ot">-&gt;</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
 liftBBEdit f builder <span class="fu">=</span> builder {
     bbIdToBB <span class="fu">=</span> M.adjust f (currentBBId builder) (bbIdToBB builder)
 }
 
 <span class="co">-- | Set the builder&#39;s current basic block to the i&#39;th basic block</span>
-<span class="ot">setBB ::</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
+<span class="ot">setBB ::</span> <span class="dt">Builder</span> <span class="ot">-&gt;</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">Builder</span>
 setBB builder i <span class="fu">=</span> builder {
   currentBBId <span class="fu">=</span> i
 }
@@ -173,14 +174,14 @@ appendInst i <span class="fu">=</span> <span class="kw">do</span>
   modify <span class="fu">.</span> liftBBEdit <span class="fu">$</span> (appendInstToBB i)
   return <span class="fu">$</span> <span class="dt">ValueInstRef</span> (namedName i)
   <span class="kw">where</span>
-<span class="ot">    appendInstToBB ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+<span class="ot">    appendInstToBB ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span>
     appendInstToBB i bb <span class="fu">=</span> bb { bbInsts<span class="fu">=</span>bbInsts bb <span class="fu">++</span> [i] }
 
 <span class="ot">setRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Builder</span> ()
 setRetInst i <span class="fu">=</span> <span class="kw">do</span>
   modify <span class="fu">.</span> liftBBEdit <span class="fu">$</span> (setBBRetInst i)
   <span class="kw">where</span>
-<span class="ot">    setBBRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span>
+<span class="ot">    setBBRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span>
     setBBRetInst i bb <span class="fu">=</span> bb { bbRetInst<span class="fu">=</span>i }
 
 
@@ -286,14 +287,11 @@ stmtsToInsts stmts <span class="fu">=</span> (for_ stmts buildStmt)
 
 
 <span class="ot">programToIR ::</span> <span class="dt">Program&#39;</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
-programToIR (<span class="dt">Program</span> stmts) <span class="fu">=</span>
-  <span class="dt">IRProgram</span> {
-    irProgramBBMap <span class="fu">=</span> bbIdToBB  builder,
-    irProgramEntryBBId <span class="fu">=</span> entryBBId builder
+programToIR (<span class="dt">Language.Program</span> stmts) <span class="fu">=</span>
+  <span class="dt">BaseIR.Program</span> {
+    programBBMap <span class="fu">=</span> bbIdToBB  builder,
+    programEntryBBId <span class="fu">=</span> entryBBId builder
   } <span class="kw">where</span>
-      builder <span class="fu">=</span> execState (stmtsToInsts stmts) newBuilder
-
-
-<span class="kw">type</span> <span class="dt">DominatorTree</span> <span class="fu">=</span> <span class="dt">T.Tree</span> <span class="dt">BBId</span></code></pre></div>
+      builder <span class="fu">=</span> execState (stmtsToInsts stmts) newBuilder</code></pre></div>
 </body>
 </html>

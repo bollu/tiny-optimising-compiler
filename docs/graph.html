@@ -74,6 +74,10 @@ Graph
     vcat [pretty <span class="st">&quot;BB graph edges&quot;</span>,
           (vcat <span class="fu">.</span> map (indent <span class="dv">4</span> <span class="fu">.</span> pretty) <span class="fu">.</span> edges <span class="fu">$</span> graph)]
 
+<span class="co">-- | returns all edges (H -&gt; T) with a given source H</span>
+<span class="ot">getEdgesFromSource ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [(a, a)]
+getEdgesFromSource g src <span class="fu">=</span> [(src, b) <span class="fu">|</span> (a, b) <span class="ot">&lt;-</span> edges g, a <span class="fu">==</span> src]
+
 <span class="co">-- | return predecessors of a node</span>
 <span class="ot">getPredecessors ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
 getPredecessors g bbid <span class="fu">=</span> [ src <span class="fu">|</span> (src, sink) <span class="ot">&lt;-</span> (edges g), sink <span class="fu">==</span> bbid]
@@ -93,14 +97,15 @@ getAllChildren tree<span class="fu">@</span>(<span class="dt">Graph</span> edges
 <span class="ot">vertices ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a  <span class="ot">-&gt;</span> [a]
 vertices (<span class="dt">Graph</span> edges) <span class="fu">=</span> nub (map fst edges <span class="fu">++</span> map snd edges)
 
+<span class="co">-- | Colors are assigned from [1..NGraphColors]</span>
 <span class="kw">type</span> <span class="dt">GraphColor</span> <span class="fu">=</span> <span class="dt">Int</span>
 <span class="kw">type</span> <span class="dt">NGraphColors</span> <span class="fu">=</span> <span class="dt">Int</span>
 
-<span class="ot">_greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="co">-- ^ Graph </span>
+_<span class="ot">greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="co">-- ^ Graph </span>
                             <span class="ot">-&gt;</span> <span class="dt">S.Set</span> a <span class="co">-- ^ Set of vertices</span>
-                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">GraphColor</span> <span class="co">-- ^ Mapping from vertices to colors</span>
+                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a (<span class="dt">Maybe</span> <span class="dt">GraphColor</span>) <span class="co">-- ^ Mapping from vertices to colors</span>
                             <span class="ot">-&gt;</span> <span class="dt">NGraphColors</span> <span class="co">-- ^ Total number of graph colors available</span>
-                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">GraphColor</span> <span class="co">-- ^ Final colored graph</span>
+                            <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a (<span class="dt">Maybe</span> <span class="dt">GraphColor</span>) <span class="co">-- ^ Final colored graph</span>
 _greedyColorGraph _ (null <span class="ot">-&gt;</span> <span class="dt">True</span>) coloring ncolors <span class="fu">=</span> coloring
 _greedyColorGraph g vs<span class="fu">@</span>(S.elemAt <span class="dv">0</span> <span class="ot">-&gt;</span> v) coloring ncolors  <span class="fu">=</span>
     _greedyColorGraph g vs&#39; coloring&#39; ncolors <span class="kw">where</span>
@@ -109,25 +114,27 @@ _greedyColorGraph g vs<span class="fu">@</span>(S.elemAt <span class="dv">0</spa
 
         <span class="co">-- colors of adjacent vertices</span>
 <span class="ot">        adjColors ::</span> [<span class="dt">GraphColor</span>]
-        adjColors <span class="fu">=</span> mconcat <span class="fu">$</span> fmap (\v <span class="ot">-&gt;</span> maybeToList (v <span class="ot">`M.lookup`</span> coloring)) adjvs
+        adjColors <span class="fu">=</span> mconcat <span class="fu">$</span> fmap (\v <span class="ot">-&gt;</span> <span class="kw">case</span> (v <span class="ot">`M.lookup`</span> coloring) <span class="kw">of</span>
+                                            <span class="dt">Just</span> (<span class="dt">Just</span> c) <span class="ot">-&gt;</span> [c]
+                                            _ <span class="ot">-&gt;</span> []) adjvs
 
         <span class="co">-- largest color</span>
         largestAdjColor <span class="fu">=</span> <span class="kw">case</span> adjColors <span class="kw">of</span>
-                            [] <span class="ot">-&gt;</span> <span class="dv">1</span>
+                            [] <span class="ot">-&gt;</span> <span class="dv">0</span>
                             xs <span class="ot">-&gt;</span> maximum xs
 
         <span class="co">-- Leave it uncolored it we can&#39;t find a color</span>
         coloring&#39; <span class="fu">=</span> <span class="kw">if</span> largestAdjColor <span class="fu">==</span> ncolors
-                <span class="kw">then</span> coloring
-                <span class="kw">else</span> M.insert v (largestAdjColor <span class="fu">+</span> <span class="dv">1</span>) coloring
+                <span class="kw">then</span> M.insert v <span class="dt">Nothing</span> coloring
+                <span class="kw">else</span> M.insert v (<span class="dt">Just</span> (largestAdjColor <span class="fu">+</span> <span class="dv">1</span>)) coloring
 
         <span class="co">-- remove vertex we currently processed</span>
         vs&#39; <span class="fu">=</span> S.deleteAt <span class="dv">0</span> vs
 
 
 <span class="co">-- | Color the graph greedily and return the mapping of colors</span>
-<span class="ot">greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> <span class="dt">NGraphColors</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a <span class="dt">Int</span>
-greedyColorGraph g ngraphcolors <span class="fu">=</span>
+<span class="ot">greedyColorGraph ::</span> <span class="dt">Ord</span> a <span class="ot">=&gt;</span> <span class="dt">NGraphColors</span> <span class="ot">-&gt;</span> <span class="dt">Graph</span> a <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> a (<span class="dt">Maybe</span> <span class="dt">Int</span>)
+greedyColorGraph ngraphcolors g <span class="fu">=</span>
     _greedyColorGraph g (S.fromList (vertices g))
                       mempty ngraphcolors</code></pre></div>
 </body>

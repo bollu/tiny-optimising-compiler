@@ -1,0 +1,256 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<h1>
+BaseIR
+</h1>
+This module contains the building blocks that are shared across the <code>IR</code> and the <code>MIPSAsm</code> module. They both use ideas of <code>Program</code>, <code>BasicBlock</code>, etc, but with slightly different underlying types. Hence, we unify the common code here.
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE StandaloneDeriving #-}</span>
+<span class="ot">{-# LANGUAGE DeriveAnyClass #-}</span>
+<span class="ot">{-# LANGUAGE DeriveFunctor #-}</span>
+<span class="ot">{-# LANGUAGE DeriveFoldable #-}</span>
+<span class="ot">{-# LANGUAGE DeriveTraversable #-}</span>
+<span class="kw">module</span> <span class="dt">BaseIR</span> <span class="kw">where</span>
+
+<span class="kw">import qualified</span> <span class="dt">Control.Arrow</span> <span class="kw">as</span> <span class="dt">A</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Data.Functor.Identity</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Monoid</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">Control.Monad</span>
+<span class="kw">import </span><span class="dt">Data.Bifunctor</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+
+<span class="co">-- | A label that uses the phantom @a as a type based discriminator</span>
+<span class="kw">data</span> <span class="dt">Label</span> a <span class="fu">=</span> <span class="dt">Label</span> {<span class="ot"> unLabel ::</span>  <span class="dt">String</span> } <span class="kw">deriving</span>(<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>)
+<span class="kw">instance</span> <span class="dt">Pretty</span> (<span class="dt">Label</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">Label</span> s) <span class="fu">=</span> pretty s
+
+
+<span class="co">-- | Convert from one type of label to another label.</span>
+<span class="ot">unsafeTransmuteLabel ::</span> <span class="dt">Label</span> a <span class="ot">-&gt;</span> <span class="dt">Label</span> b
+unsafeTransmuteLabel (<span class="dt">Label</span> lbl) <span class="fu">=</span> <span class="dt">Label</span> lbl
+
+<span class="co">-- | A basic block. Single-entry, multiple-exit.</span>
+<span class="co">-- | TODO: remove duplication of information about the bbLabel in both</span>
+<span class="co">-- | Program and BasicBlock.</span>
+<span class="kw">data</span> <span class="dt">BasicBlock</span> inst ret <span class="fu">=</span> <span class="dt">BasicBlock</span> {
+<span class="ot">  bbInsts ::</span> [inst],
+<span class="ot">  bbRetInst ::</span> ret ,
+<span class="ot">  bbLabel ::</span> <span class="dt">Label</span> (<span class="dt">BasicBlock</span> inst ret)
+}
+
+<span class="kw">deriving</span> <span class="kw">instance</span> (<span class="dt">Eq</span> inst, <span class="dt">Eq</span> ret) <span class="ot">=&gt;</span>  <span class="dt">Eq</span> (<span class="dt">BasicBlock</span> inst ret)
+
+<span class="co">-- | Used to identify basic blocks</span>
+<span class="kw">type</span> <span class="dt">BBId</span> inst retinst <span class="fu">=</span> <span class="dt">Label</span> (<span class="dt">BasicBlock</span> inst retinst)
+
+<span class="co">-- TODO: replace nest with indent</span>
+<span class="kw">instance</span> (<span class="dt">Pretty</span> inst, <span class="dt">Pretty</span> ret) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">BasicBlock</span> inst ret)<span class="kw">where</span>
+  pretty (<span class="dt">BasicBlock</span> insts ret label) <span class="fu">=</span>
+    nest <span class="dv">4</span> (vsep ([pretty label <span class="fu">&lt;&gt;</span> pretty <span class="st">&quot;:&quot;</span>] <span class="fu">++</span> body)) <span class="kw">where</span>
+      body <span class="fu">=</span> map pretty insts <span class="fu">++</span> [pretty ret]
+
+
+<span class="kw">data</span> <span class="dt">Program</span> inst ret <span class="fu">=</span> <span class="dt">Program</span>  {
+<span class="ot">  programBBMap ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">BBId</span> inst ret) (<span class="dt">BasicBlock</span> inst ret),
+<span class="ot">  programEntryBBId ::</span> (<span class="dt">BBId</span> inst ret)
+}
+
+
+<span class="kw">deriving</span> <span class="kw">instance</span> (<span class="dt">Eq</span> inst, <span class="dt">Eq</span> ret) <span class="ot">=&gt;</span>  <span class="dt">Eq</span> (<span class="dt">Program</span> inst ret)
+
+<span class="kw">instance</span> (<span class="dt">Pretty</span> inst, <span class="dt">Pretty</span> ret) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">Program</span> inst ret) <span class="kw">where</span>
+  pretty (<span class="dt">Program</span> bbmap entryId) <span class="fu">=</span>
+    vsep <span class="fu">$</span> [pretty <span class="st">&quot;entry: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty entryId, pretty <span class="st">&quot;program: &quot;</span>] <span class="fu">++</span>
+                                            fmap pretty (M.elems bbmap)
+
+
+
+<span class="co">-- | Run an effect at a particular basic block for a program</span>
+<span class="ot">traverseProgramAt ::</span> <span class="dt">Applicative</span> f <span class="ot">=&gt;</span> <span class="dt">BBId</span> inst ret 
+  <span class="ot">-&gt;</span> (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> f (<span class="dt">BasicBlock</span> inst ret))
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret <span class="ot">-&gt;</span>
+  f (<span class="dt">Program</span> inst ret)
+traverseProgramAt bbid f (<span class="dt">Program</span> bbmap entryId) <span class="fu">=</span>  <span class="dt">Program</span> <span class="fu">&lt;$&gt;</span> bbmap&#39; <span class="fu">&lt;*&gt;</span> pure entryId
+  <span class="kw">where</span>
+    bbmap&#39; <span class="fu">=</span> (\curbb&#39; <span class="ot">-&gt;</span> M.insert bbid curbb&#39; bbmap) <span class="fu">&lt;$&gt;</span> (f curbb)
+    curbb <span class="fu">=</span> <span class="kw">case</span> M.lookup bbid bbmap <span class="kw">of</span>
+              <span class="dt">Just</span> bb <span class="ot">-&gt;</span> bb
+              <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;unable to find bbid in program: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty bbid
+
+
+<span class="ot">mapProgramAt ::</span> <span class="dt">BBId</span> inst ret <span class="ot">-&gt;</span> (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret)
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret
+mapProgramAt bbid f p <span class="fu">=</span> runIdentity <span class="fu">$</span> 
+  traverseProgramAt bbid (<span class="dt">Identity</span> <span class="fu">.</span> f) p
+
+
+<span class="co">-- | Map an effect over all the BBs of the Program</span>
+<span class="ot">traverseProgramBBs ::</span> <span class="dt">Applicative</span> f <span class="ot">=&gt;</span>
+  (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> f (<span class="dt">BasicBlock</span> inst&#39; ret&#39;))
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret
+  <span class="ot">-&gt;</span> f (<span class="dt">Program</span> inst&#39; ret&#39;)
+traverseProgramBBs fbb (<span class="dt">Program</span> bbmap entrybbid) <span class="fu">=</span>
+    (<span class="dt">Program</span> <span class="fu">&lt;$&gt;</span> bbmap&#39; <span class="fu">&lt;*&gt;</span> pure (unsafeTransmuteLabel entrybbid)) <span class="kw">where</span>
+        <span class="co">-- bbmap&#39; :: M.OrderedMap (BBId inst&#39; ret&#39;) (BasicBlock inst&#39; ret&#39;)</span>
+        bbmap&#39; <span class="fu">=</span> traverse fbb bbmapRekeyed
+
+        <span class="co">-- bbmapRekeyed :: M.OrderedMap (BBId inst&#39; ret&#39;) (BasicBlock inst ret)</span>
+        bbmapRekeyed <span class="fu">=</span> M.editKeys unsafeTransmuteLabel bbmap
+
+<span class="co">-- | Map a pure effect over all BBs of the IRPRogram</span>
+<span class="ot">mapProgramBBs ::</span> (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst&#39; ret&#39;)
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst&#39; ret&#39;
+mapProgramBBs fbb program <span class="fu">=</span> runIdentity <span class="fu">$</span> traverseProgramBBs (<span class="dt">Identity</span> <span class="fu">.</span> fbb) program
+
+<span class="co">-- | Run a monadic effect over the basic blocks throwing away the results</span>
+<span class="ot">mapMProgramBBs_ ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> m ()) <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret <span class="ot">-&gt;</span> m ()
+mapMProgramBBs_ fbb (<span class="dt">Program</span> bbmap _) <span class="fu">=</span> forM_ bbmap fbb
+
+
+<span class="co">-- | Collect results from basic blocks which can be monoidally smashed.</span>
+<span class="ot">foldMapProgramBBs ::</span> <span class="dt">Monoid</span> m <span class="ot">=&gt;</span>
+  (<span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> m)
+  <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret
+  <span class="ot">-&gt;</span> m
+foldMapProgramBBs fbb program <span class="fu">=</span> foldMap fbb (programBBMap program)
+
+<span class="co">-- | Filter instructions in a basic block.</span>
+<span class="ot">filterBBInsts ::</span> (inst <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+filterBBInsts pred (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+        <span class="dt">BasicBlock</span> insts&#39; retinst lbl
+    <span class="kw">where</span> insts&#39; <span class="fu">=</span> filter pred insts
+
+<span class="co">-- | Filter instructions in a Program.</span>
+<span class="ot">filterProgramInsts ::</span> (inst <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret <span class="ot">-&gt;</span> <span class="dt">Program</span> inst ret
+filterProgramInsts pred prog <span class="fu">=</span>
+  mapProgramBBs (filterBBInsts pred) prog
+
+<span class="co">-- | Run an effect on a basic block.</span>
+<span class="ot">traverseBB ::</span> <span class="dt">Applicative</span> f <span class="ot">=&gt;</span> (inst <span class="ot">-&gt;</span> f inst&#39;)
+         <span class="ot">-&gt;</span> (ret <span class="ot">-&gt;</span> f ret&#39;)
+         <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+         <span class="ot">-&gt;</span> f (<span class="dt">BasicBlock</span> inst&#39; ret&#39;)
+traverseBB finst fretinst (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+    <span class="dt">BasicBlock</span> <span class="fu">&lt;$&gt;</span> insts&#39; <span class="fu">&lt;*&gt;</span> retinst&#39; <span class="fu">&lt;*&gt;</span> pure (unsafeTransmuteLabel lbl) <span class="kw">where</span>
+        retinst&#39; <span class="fu">=</span> fretinst retinst
+        insts&#39; <span class="fu">=</span> for insts finst
+
+<span class="co">-- | Run an effect over a basic block throwing away the results</span>
+<span class="ot">mapMBB_ ::</span> <span class="dt">Monad</span> f <span class="ot">=&gt;</span> (inst <span class="ot">-&gt;</span> f ()) <span class="ot">-&gt;</span> (ret <span class="ot">-&gt;</span> f ()) <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> f ()
+mapMBB_ finst fretinst (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span> <span class="kw">do</span>
+    for insts finst
+    fretinst retinst
+
+
+<span class="ot">weaveEffect_ ::</span> (<span class="dt">Traversable</span> f, <span class="dt">Applicative</span> f, <span class="dt">Monad</span> t, <span class="dt">Traversable</span> t) <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> f (t b))
+  <span class="ot">-&gt;</span> t a <span class="ot">-&gt;</span> f (t b)
+weaveEffect_ f as <span class="fu">=</span> join <span class="fu">&lt;$&gt;</span> intermediate <span class="co">-- f (t t b)</span>
+  <span class="kw">where</span>
+    intermediate <span class="fu">=</span> for as f
+    <span class="co">-- join :: t (t b) -&gt; t b</span>
+    join ttb <span class="fu">=</span> ttb <span class="fu">&gt;&gt;=</span> (\tb <span class="ot">-&gt;</span> tb)
+
+<span class="co">-- | Run an effect on a basic block, while allowing to create a &quot;locus&quot; around</span>
+<span class="co">-- | an instruction. This can be used to delete instructions, or add a sequence</span>
+<span class="co">-- | of instructions for one original instruction.</span>
+<span class="ot">traverseBBInstLocus ::</span> (<span class="dt">Applicative</span> f, <span class="dt">Traversable</span> f) <span class="ot">=&gt;</span> 
+  (inst <span class="ot">-&gt;</span> f [inst&#39;])
+  <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret 
+  <span class="ot">-&gt;</span> f (<span class="dt">BasicBlock</span> inst&#39; ret)
+traverseBBInstLocus finst (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+
+    <span class="dt">BasicBlock</span> <span class="fu">&lt;$&gt;</span> insts&#39;<span class="fu">&lt;*&gt;</span> pure retinst <span class="fu">&lt;*&gt;</span> pure (unsafeTransmuteLabel lbl) <span class="kw">where</span>
+      insts&#39; <span class="fu">=</span> weaveEffect_ finst insts
+
+
+<span class="ot">mapBBInstLocus ::</span> (inst <span class="ot">-&gt;</span> [inst&#39;]) <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst&#39; ret
+mapBBInstLocus f bb <span class="fu">=</span> runIdentity <span class="fu">$</span> traverseBBInstLocus (<span class="dt">Identity</span> <span class="fu">.</span> f) bb
+<span class="co">-- | Fold from the first instruction to the last one, and then on the</span>
+<span class="co">-- | RetInst of a BB.</span>
+<span class="ot">foldlBB ::</span> collect
+           <span class="ot">-&gt;</span> (collect <span class="ot">-&gt;</span> inst <span class="ot">-&gt;</span> collect)
+           <span class="ot">-&gt;</span> (collect <span class="ot">-&gt;</span> ret <span class="ot">-&gt;</span> collect)
+           <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+           <span class="ot">-&gt;</span> collect
+foldlBB seed finst fretinst (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+    fretinst (foldl finst seed insts) retinst
+
+
+<span class="co">-- | produce results on a BB and smash them together with  a monoid instance</span>
+<span class="ot">foldMapBB ::</span> <span class="dt">Monoid</span> m <span class="ot">=&gt;</span> (inst <span class="ot">-&gt;</span> m)
+    <span class="ot">-&gt;</span> (ret <span class="ot">-&gt;</span> m)
+    <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+    <span class="ot">-&gt;</span>  m
+foldMapBB finst fretinst bb <span class="fu">=</span>
+    foldlBB mempty (\c i <span class="ot">-&gt;</span> c <span class="fu">M.&lt;&gt;</span>  finst i) (\c ri <span class="ot">-&gt;</span> c <span class="fu">M.&lt;&gt;</span> fretinst ri) bb
+
+
+<span class="co">-- | Map over the instructions and return values of a basic block</span>
+<span class="ot">mapBB ::</span> (inst <span class="ot">-&gt;</span> inst&#39;)
+          <span class="ot">-&gt;</span> (ret <span class="ot">-&gt;</span> ret&#39;)
+          <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+          <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst&#39; ret&#39;
+mapBB finst fretinst bb <span class="fu">=</span>
+    runIdentity <span class="fu">$</span> traverseBB (<span class="dt">Identity</span> <span class="fu">.</span> finst) (<span class="dt">Identity</span> <span class="fu">.</span> fretinst) bb
+
+
+<span class="co">-- | Insert instructions before the first instruction in a bb.</span>
+<span class="ot">insertInstsBeginBB ::</span> [inst] <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+insertInstsBeginBB pre (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+  <span class="dt">BasicBlock</span> (pre<span class="fu">++</span>insts) retinst lbl
+
+<span class="co">-- | Insert instructions at the end of the last instruction in a bb.</span>
+<span class="ot">insertInstsEndBB ::</span> [inst] <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret <span class="ot">-&gt;</span> <span class="dt">BasicBlock</span> inst ret
+insertInstsEndBB post (<span class="dt">BasicBlock</span> insts retinst lbl) <span class="fu">=</span>
+  <span class="dt">BasicBlock</span> (insts<span class="fu">++</span>post) retinst lbl</code></pre></div>
+</body>
+</html>

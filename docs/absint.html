@@ -1,0 +1,247 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="co">-- Pretty Utils</span>
+<span class="co">-- ============</span>
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">S.Set</span> a) <span class="kw">where</span>
+  pretty s <span class="fu">=</span> <span class="kw">case</span> S.toList s <span class="kw">of</span>
+               [] <span class="ot">-&gt;</span> pretty <span class="st">&quot;emptyset&quot;</span>
+               xs <span class="ot">-&gt;</span> indent <span class="dv">1</span> <span class="fu">$</span> vcat <span class="fu">$</span> [pretty <span class="st">&quot;{&quot;</span>] <span class="fu">++</span> (map pretty xs)  <span class="fu">++</span> [pretty <span class="st">&quot;}&quot;</span>]
+
+<span class="kw">instance</span> (<span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">M.Map</span> k v) <span class="kw">where</span>
+  pretty m <span class="fu">=</span> 
+    <span class="kw">if</span> M.null m 
+       <span class="kw">then</span> pretty <span class="st">&quot;emptymap&quot;</span> 
+       <span class="kw">else</span> (indent <span class="dv">1</span> (vcat <span class="fu">$</span> [pretty <span class="st">&quot;(&quot;</span> <span class="fu">&lt;&gt;</span> pretty k <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;-&gt;&quot;</span> <span class="fu">&lt;+&gt;</span> (pretty v) <span class="fu">&lt;&gt;</span> pretty <span class="st">&quot;)&quot;</span> <span class="fu">|</span> (k, v) <span class="ot">&lt;-</span> M.toList m]))
+
+<span class="co">-- Lattice theory</span>
+<span class="co">-- ==============</span>
+<span class="co">-- top = join of all elements</span>
+<span class="kw">class</span> <span class="dt">SemiJoin</span> a <span class="kw">where</span>
+<span class="ot">  join ::</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+<span class="ot">  top ::</span> a
+
+<span class="co">-- bottom = meet of all elements </span>
+<span class="kw">class</span> <span class="dt">SemiMeet</span> a <span class="kw">where</span>
+<span class="ot">  meet ::</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+<span class="ot">  bottom ::</span> a
+
+<span class="kw">class</span> (<span class="dt">SemiJoin</span> a, <span class="dt">SemiMeet</span> a) <span class="ot">=&gt;</span> <span class="dt">Lattice</span> a
+
+<span class="kw">instance</span> <span class="dt">SemiJoin</span> a <span class="ot">=&gt;</span> <span class="dt">SemiJoin</span> (<span class="dt">Maybe</span> a) <span class="kw">where</span>
+  top <span class="fu">=</span> <span class="dt">Just</span> top
+
+  join <span class="dt">Nothing</span> a <span class="fu">=</span> a
+  join a <span class="dt">Nothing</span> <span class="fu">=</span> a
+  join (<span class="dt">Just</span> a) (<span class="dt">Just</span> b) <span class="fu">=</span> <span class="dt">Just</span> (join a b)
+
+<span class="kw">instance</span> <span class="dt">SemiMeet</span> a <span class="ot">=&gt;</span> <span class="dt">SemiMeet</span> (<span class="dt">Maybe</span> a) <span class="kw">where</span>
+  bottom <span class="fu">=</span> <span class="dt">Nothing</span>
+
+  meet <span class="dt">Nothing</span> _ <span class="fu">=</span> <span class="dt">Nothing</span>
+  meet _ <span class="dt">Nothing</span> <span class="fu">=</span> <span class="dt">Nothing</span>
+  meet (<span class="dt">Just</span> a) (<span class="dt">Just</span> b) <span class="fu">=</span> <span class="dt">Just</span> (meet a b)
+
+<span class="kw">instance</span> (<span class="dt">SemiJoin</span> a, <span class="dt">SemiJoin</span> b) <span class="ot">=&gt;</span> <span class="dt">SemiJoin</span> (a, b) <span class="kw">where</span>
+  top <span class="fu">=</span> (top, top)
+  join (a, b) (a&#39;, b&#39;) <span class="fu">=</span> (a <span class="ot">`join`</span> a&#39;, b <span class="ot">`join`</span> b&#39;)
+
+<span class="kw">instance</span> (<span class="dt">SemiMeet</span> a, <span class="dt">SemiMeet</span> b) <span class="ot">=&gt;</span> <span class="dt">SemiMeet</span> (a, b) <span class="kw">where</span>
+  bottom <span class="fu">=</span> (bottom, bottom)
+  meet (a, b) (a&#39;, b&#39;) <span class="fu">=</span> (a <span class="ot">`meet`</span> a&#39;, b <span class="ot">`meet`</span> b&#39;)
+
+<span class="kw">instance</span> (<span class="dt">Lattice</span> a, <span class="dt">Lattice</span> b) <span class="ot">=&gt;</span> <span class="dt">Lattice</span> (a, b)
+
+<span class="kw">data</span> <span class="dt">LiftedLattice</span> a <span class="fu">=</span> <span class="dt">LL</span> <span class="fu">!</span>a <span class="fu">|</span> <span class="dt">LLBot</span> <span class="fu">|</span> <span class="dt">LLTop</span> <span class="kw">deriving</span>(<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>)
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">LiftedLattice</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">LL</span> a) <span class="fu">=</span> pretty a
+  pretty <span class="dt">LLBot</span> <span class="fu">=</span> pretty <span class="st">&quot;_|_&quot;</span>
+  pretty <span class="dt">LLTop</span> <span class="fu">=</span> pretty <span class="st">&quot;T&quot;</span>
+
+<span class="kw">instance</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">SemiJoin</span> (<span class="dt">LiftedLattice</span> a) <span class="kw">where</span>
+  top <span class="fu">=</span> <span class="dt">LLTop</span>
+
+  join <span class="dt">LLBot</span> a <span class="fu">=</span> a
+  join a <span class="dt">LLBot</span> <span class="fu">=</span> a
+  join <span class="dt">LLTop</span> _ <span class="fu">=</span> <span class="dt">LLTop</span>
+  join _ <span class="dt">LLTop</span> <span class="fu">=</span> <span class="dt">LLTop</span>
+  join (<span class="dt">LL</span> a) (<span class="dt">LL</span> b) <span class="fu">=</span> <span class="kw">if</span> a <span class="fu">==</span> b <span class="kw">then</span> <span class="dt">LL</span> a <span class="kw">else</span> <span class="dt">LLTop</span>
+
+<span class="kw">instance</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">SemiMeet</span> (<span class="dt">LiftedLattice</span> a) <span class="kw">where</span>
+  bottom <span class="fu">=</span> <span class="dt">LLBot</span>
+
+  meet <span class="dt">LLBot</span> _ <span class="fu">=</span> <span class="dt">LLBot</span>
+  meet _ <span class="dt">LLBot</span> <span class="fu">=</span> <span class="dt">LLBot</span>
+  meet a <span class="dt">LLTop</span> <span class="fu">=</span> a
+  meet <span class="dt">LLTop</span> a <span class="fu">=</span> a
+  meet (<span class="dt">LL</span> a) (<span class="dt">LL</span> b) <span class="fu">=</span> <span class="kw">if</span> a <span class="fu">==</span> b <span class="kw">then</span> <span class="dt">LL</span> a <span class="kw">else</span> <span class="dt">LLBot</span>
+
+<span class="kw">instance</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Lattice</span> (<span class="dt">LiftedLattice</span> a)
+
+
+
+<span class="ot">liftLL2 ::</span> (a <span class="ot">-&gt;</span> b <span class="ot">-&gt;</span> c) <span class="ot">-&gt;</span> <span class="dt">LiftedLattice</span> a <span class="ot">-&gt;</span> <span class="dt">LiftedLattice</span> b <span class="ot">-&gt;</span> <span class="dt">LiftedLattice</span> c
+liftLL2 f <span class="dt">LLTop</span> _ <span class="fu">=</span> <span class="dt">LLTop</span>
+liftLL2 f _ <span class="dt">LLTop</span> <span class="fu">=</span> <span class="dt">LLTop</span>
+liftLL2 f <span class="dt">LLBot</span> _ <span class="fu">=</span> <span class="dt">LLBot</span>
+liftLL2 f _ <span class="dt">LLBot</span>  <span class="fu">=</span> <span class="dt">LLBot</span>
+liftLL2 f (<span class="dt">LL</span> a) (<span class="dt">LL</span> b) <span class="fu">=</span> <span class="dt">LL</span> (f a b)
+
+<span class="kw">instance</span> <span class="dt">Show</span> a <span class="ot">=&gt;</span> <span class="dt">Show</span> (<span class="dt">LiftedLattice</span> a) <span class="kw">where</span>
+  show <span class="dt">LLBot</span> <span class="fu">=</span> <span class="st">&quot;_|_&quot;</span>
+  show <span class="dt">LLTop</span> <span class="fu">=</span> <span class="st">&quot;T&quot;</span>
+  show (<span class="dt">LL</span> a) <span class="fu">=</span> show a
+
+
+<span class="kw">class</span> <span class="dt">Lattice</span> a <span class="ot">=&gt;</span> <span class="dt">BooleanAlgebra</span> a <span class="kw">where</span>
+<span class="ot">  complement ::</span> a <span class="ot">-&gt;</span> a
+
+<span class="co">-- implication in the boolean algebra</span>
+<span class="ot">imply ::</span> <span class="dt">BooleanAlgebra</span> a <span class="ot">=&gt;</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+imply a b <span class="fu">=</span> (complement a) <span class="ot">`join`</span> b
+
+<span class="co">-- symbol</span>
+<span class="ot">(===&gt;) ::</span> <span class="dt">BooleanAlgebra</span> a <span class="ot">=&gt;</span> a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+(<span class="fu">===&gt;</span>) <span class="fu">=</span> imply
+
+
+<span class="co">-- Adjoin a top element </span>
+<span class="kw">data</span> <span class="dt">ToppedLattice</span> a <span class="fu">=</span> <span class="dt">TLTop</span> <span class="fu">|</span> <span class="dt">TL</span> <span class="fu">!</span>a <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>)
+
+<span class="kw">instance</span> <span class="dt">Show</span> a <span class="ot">=&gt;</span> <span class="dt">Show</span> (<span class="dt">ToppedLattice</span> a) <span class="kw">where</span>
+  show <span class="dt">TLTop</span> <span class="fu">=</span> <span class="st">&quot;T&quot;</span>
+  show (<span class="dt">TL</span> a) <span class="fu">=</span> show a
+
+<span class="kw">data</span> <span class="dt">BottomedLattice</span> a <span class="fu">=</span> <span class="dt">TLBot</span> <span class="fu">|</span> <span class="dt">TB</span> <span class="fu">!</span>a <span class="kw">deriving</span>(<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>)
+
+<span class="kw">instance</span> <span class="dt">Show</span> a <span class="ot">=&gt;</span> <span class="dt">Show</span> (<span class="dt">BottomedLattice</span> a) <span class="kw">where</span>
+  show <span class="dt">TLBot</span> <span class="fu">=</span> <span class="st">&quot;_|_&quot;</span>
+  show (<span class="dt">TB</span> a) <span class="fu">=</span> show a
+
+
+<span class="co">-- A map based representation of a function (a -&gt; b), which on partial</span>
+<span class="co">-- missing keys returns _|_</span>
+<span class="kw">data</span> <span class="dt">SemiMeetMap</span> k v <span class="fu">=</span> <span class="dt">LM</span> <span class="fu">!</span>(<span class="dt">M.Map</span> k v)  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>)
+
+<span class="co">-- Insert a regular value into a lattice map</span>
+<span class="ot">lminsert ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> k <span class="ot">-&gt;</span> v <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k v
+lminsert k v (<span class="dt">LM</span> m) <span class="fu">=</span> <span class="dt">LM</span> <span class="fu">$</span> M.insert k v m
+
+<span class="co">-- pointwise produce of two lattice maps</span>
+<span class="co">-- If a value is missing in either lattice, put a bottom in its place</span>
+<span class="ot">lmproduct ::</span> (<span class="dt">SemiMeet</span> v, <span class="dt">SemiMeet</span> w, <span class="dt">Ord</span> k) <span class="ot">=&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k w <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k (v, w)
+lmproduct (<span class="dt">LM</span> m) (<span class="dt">LM</span> m&#39;) <span class="fu">=</span> <span class="kw">let</span>
+  missingm&#39; <span class="fu">=</span> M.mapMissing (\k w <span class="ot">-&gt;</span> bottom)
+  missingm <span class="fu">=</span>  M.mapMissing (\k v <span class="ot">-&gt;</span> bottom)
+  merger <span class="fu">=</span> M.zipWithMatched (\k tx ty <span class="ot">-&gt;</span> (tx, ty))
+  <span class="kw">in</span> <span class="dt">LM</span> <span class="fu">$</span> M.merge missingm&#39; missingm merger m m&#39;
+
+<span class="ot">adjust ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> k <span class="ot">-&gt;</span> (v <span class="ot">-&gt;</span> v) <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k v
+adjust k f (<span class="dt">LM</span> m) <span class="fu">=</span> <span class="dt">LM</span> <span class="fu">$</span> M.adjust f k m
+
+<span class="ot">(!!#!) ::</span> (<span class="dt">Ord</span> k, <span class="dt">SemiMeet</span> v) <span class="ot">=&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> v
+(<span class="fu">!!#!</span>) (<span class="dt">LM</span> m) k <span class="fu">=</span> <span class="kw">case</span> m <span class="fu">M.!?</span> k <span class="kw">of</span>
+                   <span class="dt">Just</span> v <span class="ot">-&gt;</span> v
+                   <span class="dt">Nothing</span> <span class="ot">-&gt;</span> bottom
+
+
+<span class="ot">(!!#?) ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> k <span class="ot">-&gt;</span> <span class="dt">Maybe</span> v
+(<span class="fu">!!#?</span>) (<span class="dt">LM</span> m) k <span class="fu">=</span> m <span class="fu">M.!?</span> k 
+
+<span class="ot">lmfromlist ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> [(k, v)] <span class="ot">-&gt;</span> <span class="dt">SemiMeetMap</span> k v
+lmfromlist kvs <span class="fu">=</span> <span class="dt">LM</span> <span class="fu">$</span> M.fromList [(k, v) <span class="fu">|</span> (k, v) <span class="ot">&lt;-</span> kvs]
+
+<span class="ot">lmempty ::</span> <span class="dt">SemiMeetMap</span> k v 
+lmempty <span class="fu">=</span> <span class="dt">LM</span> <span class="fu">$</span> M.empty
+
+<span class="ot">lmtolist ::</span> <span class="dt">Ord</span> k <span class="ot">=&gt;</span> <span class="dt">SemiMeetMap</span> k v <span class="ot">-&gt;</span> [(k, v)]
+lmtolist (<span class="dt">LM</span> m) <span class="fu">=</span> M.toList m
+
+<span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Show</span> k, <span class="dt">Show</span> v, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> <span class="dt">Show</span> (<span class="dt">SemiMeetMap</span> k v) <span class="kw">where</span>
+  show (<span class="dt">LM</span> m) <span class="fu">=</span> show <span class="fu">$</span> [(k, m <span class="fu">!!#</span> k) <span class="fu">|</span> k <span class="ot">&lt;-</span> M.keys m]
+
+
+<span class="kw">instance</span> (<span class="dt">Ord</span> k, <span class="dt">Pretty</span> k, <span class="dt">Pretty</span> v) <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">SemiMeetMap</span> k v) <span class="kw">where</span>
+  pretty (<span class="dt">LM</span> m) <span class="fu">=</span>  pretty m <span class="co">-- vcat $ [pretty k &lt;+&gt; pretty &quot;-&gt;&quot; &lt;+&gt; pretty (m !!# k) | k &lt;- M.keys m]</span>
+
+<span class="kw">instance</span> <span class="dt">SemiMeet</span> v <span class="ot">=&gt;</span> <span class="dt">SemiMeet</span> (<span class="dt">SemiMeetMap</span> k v) <span class="kw">where</span>
+  bottom <span class="fu">=</span> <span class="dt">LM</span> M.empty
+  meet _ _ <span class="fu">=</span> error <span class="st">&quot;TODO: define meet&quot;</span></code></pre></div>
+<h1>
+Helper to repeat till fixpoint
+</h1>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">repeatTillFix ::</span> (<span class="dt">Eq</span> a) <span class="ot">=&gt;</span>  (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+repeatTillFix f a <span class="fu">=</span>
+  <span class="kw">let</span> a&#39; <span class="fu">=</span> f a <span class="kw">in</span>
+  <span class="kw">if</span> a <span class="fu">==</span> a&#39; <span class="kw">then</span> a <span class="kw">else</span> repeatTillFix f a&#39;
+
+
+<span class="co">-- repeat till fixpoint, or the max count</span>
+<span class="ot">repeatTillFixDebug ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> a
+repeatTillFixDebug <span class="dv">0</span> f a <span class="fu">=</span> a
+repeatTillFixDebug n f a <span class="fu">=</span> 
+  <span class="kw">let</span> a&#39; <span class="fu">=</span> f a <span class="kw">in</span> <span class="kw">if</span> a&#39; <span class="fu">==</span> a <span class="kw">then</span> a <span class="kw">else</span> repeatTillFixDebug (n <span class="fu">-</span> <span class="dv">1</span>) f a&#39;
+
+
+<span class="ot">repeatTillFixDebugTrace ::</span> <span class="dt">Eq</span> a <span class="ot">=&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> [a]
+repeatTillFixDebugTrace <span class="dv">0</span> f a <span class="fu">=</span> [a]
+repeatTillFixDebugTrace n f a <span class="fu">=</span> 
+  <span class="kw">let</span> a&#39; <span class="fu">=</span> f a <span class="kw">in</span> <span class="kw">if</span> a&#39; <span class="fu">==</span> a <span class="kw">then</span> [a] <span class="kw">else</span> a<span class="fu">:</span>repeatTillFixDebugTrace (n <span class="fu">-</span> <span class="dv">1</span>) f a&#39;
+
+<span class="ot">repeatTillFixDebugTraceM ::</span> (<span class="dt">Monad</span> m) <span class="ot">=&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Bool</span>) <span class="ot">-&gt;</span> (a <span class="ot">-&gt;</span> m a) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> m [a]
+repeatTillFixDebugTraceM <span class="dv">0</span> eqf f a <span class="fu">=</span> return [a]
+repeatTillFixDebugTraceM n eqf f a <span class="fu">=</span> <span class="kw">do</span>
+  a&#39; <span class="ot">&lt;-</span> f a
+  <span class="kw">if</span> eqf a a&#39; 
+  <span class="kw">then</span> return [a]
+  <span class="kw">else</span> <span class="kw">do</span>
+    as <span class="ot">&lt;-</span> repeatTillFixDebugTraceM (n <span class="fu">-</span> <span class="dv">1</span>) eqf f a&#39;
+    return (a&#39; <span class="fu">:</span> as)</code></pre></div>
+</body>
+</html>

@@ -46,6 +46,11 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
   <link rel="stylesheet" href="pandoc.css" type="text/css" />
 </head>
 <body>
+<h1>
+Parser
+</h1>
+<p>In this module, we define the parser for our source language. We use <code>trifecta</code> as our parser, and we import all our parser combinators from the <code>parsers</code> package.</p>
+This module can be considered as a quick tutorial to <code>trifecta</code>.
 <div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="kw">module</span> <span class="dt">Parser</span> <span class="kw">where</span>
 
 <span class="kw">import </span><span class="dt">Language</span>
@@ -68,12 +73,19 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 
 
 <span class="kw">import </span><span class="dt">Data.ByteString.Char8</span> <span class="kw">as</span> <span class="dt">BS</span>
-<span class="kw">import qualified</span> <span class="dt">Text.PrettyPrint.ANSI.Leijen</span> <span class="kw">as</span> <span class="dt">TrifectaPP</span>
-
-<span class="co">-- import Data.Text.Prettyprint.Doc as PP</span>
-(<span class="fu">&lt;??&gt;</span>) <span class="fu">=</span> flip (<span class="fu">&lt;?&gt;</span>)
-
-<span class="co">-- | Syntax rules for parsing variable-looking like identifiers.</span>
+<span class="kw">import qualified</span> <span class="dt">Text.PrettyPrint.ANSI.Leijen</span> <span class="kw">as</span> <span class="dt">TrifectaPP</span></code></pre></div>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="co">-- import Data.Text.Prettyprint.Doc as PP</span>
+(<span class="fu">&lt;??&gt;</span>) <span class="fu">=</span> flip (<span class="fu">&lt;?&gt;</span>)</code></pre></div>
+<h2>
+Parsing identifiers
+</h2>
+<p><code>trifecta</code> needs us to tell it what the reserved keywords of our language are so it can skip those strings. To parse identifiers, we need three main components:</p>
+<ul>
+<li><p><code>_styleStart</code>, which is the characters that can act as the starting character of our identifier.</p></li>
+<li><p><code>_styleLetter</code>, which the parser will consume greedily when it sees a <code>_styleStart</code></p></li>
+<li><p><code>_styleReserved</code>, which are strings that should <em>not</em> be considered identifiers because these are reserved keywords.</p></li>
+</ul>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="co">-- | Syntax rules for parsing variable-looking like identifiers.</span>
 <span class="ot">identStyle ::</span> <span class="dt">IdentifierStyle</span> <span class="dt">Parser</span>
 identStyle <span class="fu">=</span> <span class="dt">IdentifierStyle</span>
     { _styleName <span class="fu">=</span> <span class="st">&quot;variable&quot;</span>
@@ -81,9 +93,12 @@ identStyle <span class="fu">=</span> <span class="dt">IdentifierStyle</span>
     , _styleLetter <span class="fu">=</span> alphaNum <span class="fu">&lt;|&gt;</span> oneOf <span class="st">&quot;_&#39;#&quot;</span>
     , _styleReserved <span class="fu">=</span> HashSet.fromList [<span class="st">&quot;define&quot;</span>, <span class="st">&quot;assign&quot;</span>, <span class="st">&quot;if&quot;</span>, <span class="st">&quot;else&quot;</span>, <span class="st">&quot;return&quot;</span>, <span class="st">&quot;*&quot;</span>, <span class="st">&quot;+&quot;</span>, <span class="st">&quot;&lt;&quot;</span>, <span class="st">&quot;&amp;&amp;&quot;</span>]
     , _styleHighlight <span class="fu">=</span> <span class="dt">Identifier</span>
-    , _styleReservedHighlight <span class="fu">=</span> <span class="dt">ReservedIdentifier</span> }
-
-<span class="co">-- | Parse a variable identifier. Variables start with a lower-case letter or</span>
+    , _styleReservedHighlight <span class="fu">=</span> <span class="dt">ReservedIdentifier</span> }</code></pre></div>
+<h2>
+Standard parsers
+</h2>
+<p>The only point of interest here is that we choose to name our parsers with the <code>&lt;??&gt;</code> combinator, which is used to provide better error messages.</p>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="co">-- | Parse a variable identifier. Variables start with a lower-case letter or</span>
 <span class="co">-- @_@, followed by a string consisting of alphanumeric characters or @&#39;@, @_@.</span>
 <span class="ot">litp ::</span> <span class="dt">Parser</span> <span class="dt">Literal</span>
 litp <span class="fu">=</span> <span class="st">&quot;varname&quot;</span> <span class="fu">&lt;??&gt;</span> (<span class="dt">Literal</span> <span class="fu">&lt;$&gt;</span> (ident identStyle))
@@ -97,9 +112,12 @@ boolp <span class="fu">=</span> ((const <span class="dt">True</span>) <span clas
 
 <span class="ot">term   ::</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>
 term    <span class="fu">=</span>  (Text.Parser.Token.parens exprp
-       <span class="fu">&lt;|&gt;</span> <span class="dt">ELiteral</span> () <span class="fu">&lt;$&gt;</span> litp <span class="fu">&lt;|&gt;</span> <span class="dt">EInt</span> () <span class="fu">&lt;$&gt;</span> intp) <span class="fu">&lt;?&gt;</span> <span class="st">&quot;simple expression&quot;</span>
-
-<span class="ot">table  ::</span> [[<span class="dt">Operator</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>]]
+       <span class="fu">&lt;|&gt;</span> <span class="dt">ELiteral</span> () <span class="fu">&lt;$&gt;</span> litp <span class="fu">&lt;|&gt;</span> <span class="dt">EInt</span> () <span class="fu">&lt;$&gt;</span> intp) <span class="fu">&lt;?&gt;</span> <span class="st">&quot;simple expression&quot;</span></code></pre></div>
+<h2>
+Expression Parsing
+</h2>
+<p>Expression parsing is also very nice in <code>trifecta</code>, as one can create a table of operators with their priority and associativities and have that &quot;just work&quot;.</p>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">table  ::</span> [[<span class="dt">Operator</span> <span class="dt">Parser</span> <span class="dt">Expr&#39;</span>]]
 table  <span class="fu">=</span> [[binary <span class="st">&quot;*&quot;</span> <span class="dt">Multiply</span> <span class="dt">AssocLeft</span>],
           [binary <span class="st">&quot;+&quot;</span> <span class="dt">Plus</span>  <span class="dt">AssocLeft</span>], 
           [binary <span class="st">&quot;&lt;&quot;</span> <span class="dt">L</span> <span class="dt">AssocLeft</span>],

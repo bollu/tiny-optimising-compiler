@@ -54,21 +54,36 @@ Internal Representation
 <span class="ot">{-# LANGUAGE DeriveFunctor #-}</span>
 <span class="ot">{-# LANGUAGE DeriveFoldable #-}</span>
 <span class="ot">{-# LANGUAGE DeriveTraversable #-}</span>
+<span class="ot">{-# LANGUAGE ViewPatterns #-}</span>
+<span class="ot">{-# LANGUAGE ScopedTypeVariables #-}</span>
+
 <span class="kw">module</span> <span class="dt">IR</span> <span class="kw">where</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
 <span class="kw">import qualified</span> <span class="dt">Language</span> <span class="kw">as</span> <span class="dt">L</span>
 <span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
 <span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
 <span class="kw">import </span><span class="dt">Data.Functor.Identity</span>
-<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Monoid</span> <span class="kw">as</span> <span class="dt">Monoid</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>(for)
+<span class="kw">import </span><span class="dt">Control.Applicative</span>(liftA2)
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>(<span class="dt">State</span>, execState, modify)
 
-<span class="kw">data</span> <span class="dt">SSA</span>
-<span class="kw">data</span> <span class="dt">NotSSA</span>
+<span class="kw">type</span> <span class="dt">IRBB</span> <span class="fu">=</span> <span class="dt">BasicBlock</span> (<span class="dt">Named</span> <span class="dt">Inst</span>) <span class="dt">RetInst</span>
+<span class="kw">type</span> <span class="dt">IRBBId</span> <span class="fu">=</span> <span class="dt">BBId</span> (<span class="dt">Named</span> <span class="dt">Inst</span>) (<span class="dt">RetInst</span>)
 
-<span class="co">-- | A label that uses the phantom @a as a type based discriminator</span>
-<span class="kw">data</span> <span class="dt">Label</span> a <span class="fu">=</span> <span class="dt">Label</span> {<span class="ot"> unLabel ::</span>  <span class="dt">String</span> } <span class="kw">deriving</span>(<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>)
-<span class="kw">instance</span> <span class="dt">Pretty</span> (<span class="dt">Label</span> a) <span class="kw">where</span>
-  pretty (<span class="dt">Label</span> s) <span class="fu">=</span> pretty s
+<span class="co">-- | Default basic block.</span>
+<span class="ot">defaultIRBB ::</span> <span class="dt">IRBB</span>
+defaultIRBB <span class="fu">=</span> <span class="dt">BasicBlock</span> [] (<span class="dt">RetInstTerminal</span>) (<span class="dt">Label</span> <span class="st">&quot;undefined&quot;</span>)
+
+<span class="co">-- | Given an IRBB, return a list of Phi nodes.</span>
+<span class="ot">getIRBBPhis ::</span> <span class="dt">IRBB</span> <span class="ot">-&gt;</span> [<span class="dt">Named</span> <span class="dt">Inst</span>]
+getIRBBPhis bb <span class="fu">=</span> bbInsts <span class="fu">$</span>
+  filterBBInsts (\(<span class="dt">Named</span> _ i) <span class="ot">-&gt;</span> <span class="kw">case</span> i <span class="kw">of</span>
+                                <span class="dt">InstPhi</span> _ <span class="ot">-&gt;</span> <span class="dt">True</span>
+                                _ <span class="ot">-&gt;</span> <span class="dt">False</span>) bb
+
 
 <span class="co">-- a Value, which can either be a constant, or a reference to an instruction.</span>
 <span class="kw">data</span> <span class="dt">Value</span> <span class="fu">=</span> <span class="dt">ValueConstInt</span> <span class="dt">Int</span> <span class="fu">|</span> <span class="dt">ValueInstRef</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="kw">deriving</span>(<span class="dt">Eq</span>)
@@ -78,20 +93,36 @@ Internal Representation
   pretty (<span class="dt">ValueInstRef</span> name) <span class="fu">=</span> pretty <span class="st">&quot;%&quot;</span> <span class="fu">&lt;&gt;</span> pretty name
 
 <span class="co">-- | Instructions that we allow within a basic block.</span>
-<span class="kw">data</span> <span class="dt">Inst</span>  <span class="kw">where</span>
-  <span class="dt">InstAlloc</span><span class="ot"> ::</span> <span class="dt">Inst</span>
-  <span class="dt">InstAdd</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstMul</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstL</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstAnd</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstLoad</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstStore</span><span class="ot"> ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
-  <span class="dt">InstPhi</span><span class="ot"> ::</span> <span class="dt">NE.NonEmpty</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Inst</span>
+<span class="kw">data</span> <span class="dt">Inst</span> <span class="fu">=</span> <span class="dt">InstAlloc</span>
+  <span class="fu">|</span> <span class="dt">InstAdd</span> <span class="dt">Value</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstMul</span> <span class="dt">Value</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstL</span> <span class="dt">Value</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstAnd</span> <span class="dt">Value</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstLoad</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstStore</span> <span class="dt">Value</span> <span class="dt">Value</span>
+  <span class="fu">|</span> <span class="dt">InstPhi</span> (<span class="dt">NE.NonEmpty</span> (<span class="dt">IRBBId</span>, <span class="dt">Value</span>)) <span class="kw">deriving</span>(<span class="dt">Eq</span>)
 
+<span class="co">-- | Given `Inst` (which is known to be a Phi node), get a `Value` which</span>
+<span class="co">-- | corresponds to the given `IRBBId`</span>
+<span class="ot">getPhiValueForBB ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Value</span>
+getPhiValueForBB bbid phi<span class="fu">@</span>(<span class="dt">InstPhi</span> valList) <span class="fu">=</span> 
+  <span class="kw">case</span> NE.filter ((<span class="fu">==</span>bbid) <span class="fu">.</span> fst) valList <span class="kw">of</span>
+    [] <span class="ot">-&gt;</span> <span class="dt">Nothing</span>
+    [(_, v)] <span class="ot">-&gt;</span> <span class="dt">Just</span> v
+    xs <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> vcat <span class="fu">$</span> 
+        [pretty <span class="st">&quot;Phi node should at most one copy of a predecessor BB, found:&quot;</span>,
+        pretty xs,
+        pretty <span class="st">&quot;Phi node:&quot;</span>,
+        pretty phi]
+getPhiValueForBB _ inst <span class="fu">=</span>
+  error <span class="fu">.</span> docToString <span class="fu">$</span> vcat 
+    [pretty <span class="st">&quot;getPhiValueForBB should only be called on Phi. Found:&quot;</span>,
+     pretty inst]
 <span class="co">-- | Map over the `Value`s in an Inst</span>
 <span class="ot">mapInstValue ::</span> (<span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Inst</span>
 mapInstValue f inst <span class="fu">=</span> runIdentity <span class="fu">$</span> forInstValue (<span class="dt">Identity</span> <span class="fu">.</span> f) inst
 
+<span class="co">-- | TODO: use Uniplate.</span>
 <span class="co">-- | Run an effect `f` over the values of an instruction</span>
 <span class="ot">forInstValue ::</span> <span class="dt">Applicative</span> m <span class="ot">=&gt;</span> (<span class="dt">Value</span> <span class="ot">-&gt;</span> m <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> m <span class="dt">Inst</span>
 forInstValue _ (<span class="dt">InstAlloc</span>) <span class="fu">=</span> pure <span class="dt">InstAlloc</span>
@@ -100,8 +131,23 @@ forInstValue f (<span class="dt">InstMul</span> lhs rhs) <span class="fu">=</spa
 forInstValue f (<span class="dt">InstL</span> lhs rhs) <span class="fu">=</span> <span class="dt">InstL</span> <span class="fu">&lt;$&gt;</span> (f lhs) <span class="fu">&lt;*&gt;</span> (f rhs)
 forInstValue f (<span class="dt">InstAnd</span> lhs rhs) <span class="fu">=</span> <span class="dt">InstAnd</span> <span class="fu">&lt;$&gt;</span> (f lhs) <span class="fu">&lt;*&gt;</span> (f rhs)
 forInstValue f (<span class="dt">InstLoad</span> lhs) <span class="fu">=</span> <span class="dt">InstLoad</span> <span class="fu">&lt;$&gt;</span> f lhs
-forInstValue f (<span class="dt">InstStore</span> lhs rhs) <span class="fu">=</span> <span class="dt">InstAnd</span> <span class="fu">&lt;$&gt;</span> (f lhs) <span class="fu">&lt;*&gt;</span> (f rhs)
-forInstValue _ phi<span class="fu">@</span>(<span class="dt">InstPhi</span> _) <span class="fu">=</span> pure phi
+forInstValue f (<span class="dt">InstStore</span> lhs rhs) <span class="fu">=</span> <span class="dt">InstStore</span> <span class="fu">&lt;$&gt;</span> (f lhs) <span class="fu">&lt;*&gt;</span> (f rhs)
+forInstValue f (<span class="dt">InstPhi</span> valList) <span class="fu">=</span> <span class="dt">InstPhi</span> <span class="fu">&lt;$&gt;</span> for valList (f&#39; f) <span class="kw">where</span>
+<span class="ot">  f&#39; ::</span> <span class="dt">Applicative</span> m <span class="ot">=&gt;</span> (<span class="dt">Value</span> <span class="ot">-&gt;</span> m <span class="dt">Value</span>)
+      <span class="ot">-&gt;</span> (<span class="dt">IRBBId</span>, <span class="dt">Value</span>)
+      <span class="ot">-&gt;</span> m (<span class="dt">IRBBId</span>, <span class="dt">Value</span>)
+  f&#39; f (irbbid, val) <span class="fu">=</span> liftA2 (,) (pure irbbid) (f val)
+
+<span class="co">-- | Collect a monoidal Value over an Inst</span>
+<span class="ot">foldMapInstValue ::</span> <span class="dt">Monoid</span> m <span class="ot">=&gt;</span> (<span class="dt">Value</span> <span class="ot">-&gt;</span> m) <span class="ot">-&gt;</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> m
+foldMapInstValue f inst <span class="fu">=</span> execState final Monoid.mempty <span class="kw">where</span>
+  <span class="co">-- go :: Value -&gt; State m Value</span>
+  go v <span class="fu">=</span> <span class="kw">do</span> 
+          modify (\m <span class="ot">-&gt;</span> m <span class="fu">Monoid.&lt;&gt;</span> f v)
+          return v
+
+  <span class="co">-- final :: State m Inst</span>
+  final <span class="fu">=</span> (forInstValue go inst)
 
 
 <span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">Inst</span> <span class="kw">where</span>
@@ -117,45 +163,13 @@ forInstValue _ phi<span class="fu">@</span>(<span class="dt">InstPhi</span> _) <
     pretty <span class="st">&quot;Phi: &quot;</span> <span class="fu">&lt;+&gt;</span> hcat (punctuate comma (NE.toList (fmap (\(bbid, val) <span class="ot">-&gt;</span>
                                 brackets (pretty bbid <span class="fu">&lt;+&gt;</span> pretty val)) philist)))
 
-<span class="co">-- | Represents @a that is optionally named by a @Label a</span>
-<span class="kw">data</span> <span class="dt">Named</span> a <span class="fu">=</span> <span class="dt">Named</span> {<span class="ot"> namedName ::</span> <span class="dt">Label</span> a,<span class="ot"> namedData ::</span> a } <span class="kw">deriving</span>(<span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>)
-
-
-<span class="co">-- | Infix operator for @Named constructor</span>
-<span class="ot">(=:=) ::</span> <span class="dt">Label</span> a  <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Named</span> a
-name <span class="fu">=:=</span> a <span class="fu">=</span> <span class="dt">Named</span> name a
-
-
-<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">Named</span> a) <span class="kw">where</span>
-  pretty (<span class="dt">Named</span> name data&#39;) <span class="fu">=</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:=&quot;</span> <span class="fu">&lt;+&gt;</span> pretty data&#39;
-
-<span class="co">-- | Used to identify basic blocks</span>
-<span class="kw">type</span> <span class="dt">BBId</span> <span class="fu">=</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span>
-<span class="co">-- | A basic block. Single-entry, multiple-exit.</span>
-<span class="kw">data</span> <span class="dt">BasicBlock</span> <span class="fu">=</span> <span class="dt">BasicBlock</span> {
-<span class="ot">  bbInsts ::</span> [<span class="dt">Named</span> <span class="dt">Inst</span>],
-<span class="ot">  bbRetInst ::</span> <span class="dt">RetInst</span> ,
-<span class="ot">  bbLabel ::</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span>
-}
-
-<span class="co">-- | Default basic block.</span>
-<span class="ot">defaultBB ::</span> <span class="dt">BasicBlock</span>
-defaultBB <span class="fu">=</span> <span class="dt">BasicBlock</span> [] (<span class="dt">RetInstTerminal</span>) (<span class="dt">Label</span> <span class="st">&quot;undefined&quot;</span>)
-
-<span class="co">-- TODO: replace nest with indent</span>
-<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">BasicBlock</span> <span class="kw">where</span>
-  pretty (<span class="dt">BasicBlock</span> insts ret label) <span class="fu">=</span>
-    nest <span class="dv">4</span> (vsep ([pretty label <span class="fu">&lt;&gt;</span> pretty <span class="st">&quot;:&quot;</span>] <span class="fu">++</span> body)) <span class="kw">where</span>
-      body <span class="fu">=</span> map pretty insts <span class="fu">++</span> [pretty ret]
-
-
 <span class="co">-- | Return instructions are the only ones that can cause control flow</span>
 <span class="co">-- | between one basic block to another.</span>
 <span class="kw">data</span> <span class="dt">RetInst</span> <span class="fu">=</span>
-  <span class="dt">RetInstConditionalBranch</span> <span class="dt">Value</span> <span class="dt">BBId</span> <span class="dt">BBId</span> <span class="fu">|</span>
-  <span class="dt">RetInstBranch</span> <span class="dt">BBId</span> <span class="fu">|</span>
+  <span class="dt">RetInstConditionalBranch</span> <span class="dt">Value</span> <span class="dt">IRBBId</span> <span class="dt">IRBBId</span> <span class="fu">|</span>
+  <span class="dt">RetInstBranch</span> <span class="dt">IRBBId</span> <span class="fu">|</span>
   <span class="dt">RetInstTerminal</span> <span class="fu">|</span>
-  <span class="dt">RetInstRet</span> <span class="dt">Value</span>
+  <span class="dt">RetInstRet</span> <span class="dt">Value</span> <span class="kw">deriving</span>(<span class="dt">Eq</span>)
 
 <span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">RetInst</span> <span class="kw">where</span>
   pretty (<span class="dt">RetInstTerminal</span>) <span class="fu">=</span> pretty <span class="st">&quot;TERMINAL&quot;</span>
@@ -174,13 +188,53 @@ forRetInstValue f (<span class="dt">RetInstConditionalBranch</span> v t e) <span
     <span class="dt">RetInstConditionalBranch</span> <span class="fu">&lt;$&gt;</span> f v <span class="fu">&lt;*&gt;</span> pure t <span class="fu">&lt;*&gt;</span> pure e
 forRetInstValue f (<span class="dt">RetInstRet</span> v) <span class="fu">=</span> <span class="dt">RetInstRet</span> <span class="fu">&lt;$&gt;</span> f v
 
-<span class="kw">data</span> <span class="dt">IRProgram</span> <span class="fu">=</span> <span class="dt">IRProgram</span> {
-<span class="ot">  irProgramBBMap ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">BBId</span> <span class="dt">BasicBlock</span>,
-<span class="ot">  irProgramEntryBBId ::</span> <span class="dt">BBId</span>
-}
+<span class="ot">mapRetInstValue ::</span> (<span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">RetInst</span>
+mapRetInstValue f ret <span class="fu">=</span> runIdentity <span class="fu">$</span> forRetInstValue (<span class="dt">Identity</span> <span class="fu">.</span> f) ret
 
-<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">IRProgram</span> <span class="kw">where</span>
-  pretty (<span class="dt">IRProgram</span> bbmap entryId) <span class="fu">=</span> vsep <span class="fu">$</span> [pretty <span class="st">&quot;entry: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty entryId, pretty <span class="st">&quot;program: &quot;</span>] <span class="fu">++</span>
-                                            fmap pretty (M.elems bbmap)</code></pre></div>
+<span class="co">-- | Run an effect `f` over the basic block IDs of the return instruction</span>
+<span class="ot">forRetInstBBId ::</span> <span class="dt">Applicative</span> m <span class="ot">=&gt;</span> (<span class="dt">IRBBId</span> <span class="ot">-&gt;</span> m <span class="dt">IRBBId</span>) <span class="ot">-&gt;</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> m <span class="dt">RetInst</span>
+forRetInstBBId _ <span class="dt">RetInstTerminal</span> <span class="fu">=</span> pure <span class="dt">RetInstTerminal</span>
+forRetInstBBId f (<span class="dt">RetInstBranch</span> bbid) <span class="fu">=</span>  (<span class="dt">RetInstBranch</span> <span class="fu">&lt;$&gt;</span> f bbid)
+forRetInstBBId f (<span class="dt">RetInstConditionalBranch</span> v t e) <span class="fu">=</span>
+    <span class="dt">RetInstConditionalBranch</span> <span class="fu">&lt;$&gt;</span> pure v <span class="fu">&lt;*&gt;</span> f t <span class="fu">&lt;*&gt;</span> f e
+forRetInstBBId _ (<span class="dt">RetInstRet</span> v) <span class="fu">=</span> pure (<span class="dt">RetInstRet</span> v)
+
+<span class="ot">mapRetInstBBId ::</span> (<span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">IRBBId</span>) <span class="ot">-&gt;</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">RetInst</span>
+mapRetInstBBId f ret <span class="fu">=</span> runIdentity <span class="fu">$</span> forRetInstBBId (<span class="dt">Identity</span> <span class="fu">.</span> f) ret
+
+
+<span class="co">-- | Represents @a that is optionally named by a @Label a</span>
+<span class="kw">data</span> <span class="dt">Named</span> a <span class="fu">=</span> <span class="dt">Named</span> {<span class="ot"> namedName ::</span> <span class="dt">Label</span> a,<span class="ot"> namedData ::</span> a } <span class="kw">deriving</span>(<span class="dt">Functor</span>, <span class="dt">Foldable</span>, <span class="dt">Traversable</span>, <span class="dt">Eq</span>)
+
+<span class="ot">hasName ::</span> (<span class="dt">Label</span> a) <span class="ot">-&gt;</span> <span class="dt">Named</span> a <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+hasName lbl named <span class="fu">=</span> namedName named <span class="fu">==</span> lbl
+
+
+<span class="co">-- | Infix operator for @Named constructor</span>
+<span class="ot">(=:=) ::</span> <span class="dt">Label</span> a  <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Named</span> a
+name <span class="fu">=:=</span> a <span class="fu">=</span> <span class="dt">Named</span> name a
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> a <span class="ot">=&gt;</span> <span class="dt">Pretty</span> (<span class="dt">Named</span> a) <span class="kw">where</span>
+  pretty (<span class="dt">Named</span> name data&#39;) <span class="fu">=</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:=&quot;</span> <span class="fu">&lt;+&gt;</span> pretty data&#39;
+
+
+<span class="kw">type</span> <span class="dt">IRProgram</span> <span class="fu">=</span> <span class="dt">Program</span> (<span class="dt">Named</span> <span class="dt">Inst</span>) <span class="dt">RetInst</span>
+
+<span class="co">-- | Replace all uses of an instruction in a program</span>
+<span class="ot">replaceUsesOfInst ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
+replaceUsesOfInst instlbl newval program <span class="fu">=</span>
+    mapProgramBBs fbb program  <span class="kw">where</span>
+<span class="ot">        replaceVal ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span>
+        replaceVal (<span class="dt">ValueInstRef</span> ((<span class="fu">==</span> instlbl) <span class="ot">-&gt;</span> <span class="dt">True</span>)) <span class="fu">=</span> newval
+        replaceVal v <span class="fu">=</span> v
+
+<span class="ot">        finst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Named</span> <span class="dt">Inst</span>
+        finst <span class="fu">=</span> fmap (mapInstValue replaceVal)
+
+<span class="ot">        fretinst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">RetInst</span>
+        fretinst <span class="fu">=</span> mapRetInstValue replaceVal
+
+<span class="ot">        fbb ::</span> <span class="dt">IRBB</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span>
+        fbb <span class="fu">=</span> mapBB finst fretinst</code></pre></div>
 </body>
 </html>

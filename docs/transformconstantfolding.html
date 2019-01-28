@@ -104,8 +104,13 @@ Key Takeaway of this pass
 <span class="kw">import </span><span class="dt">Control.Applicative</span>
 <span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
 <span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
 <span class="kw">import </span><span class="dt">PrettyUtils</span>
+
+<span class="ot">boolToInt ::</span> <span class="dt">Bool</span> <span class="ot">-&gt;</span> <span class="dt">Int</span>
+boolToInt <span class="dt">False</span> <span class="fu">=</span> <span class="dv">0</span>
+boolToInt <span class="dt">True</span> <span class="fu">=</span> <span class="dv">1</span>
 
 <span class="co">-- | Fold all possible arithmetic / boolean ops</span>
 <span class="ot">tryFoldInst ::</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Value</span>
@@ -114,7 +119,8 @@ tryFoldInst (<span class="dt">InstAdd</span> (<span class="dt">ValueConstInt</sp
 tryFoldInst (<span class="dt">InstMul</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
     <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> (i <span class="fu">*</span> j)
 tryFoldInst (<span class="dt">InstL</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
-    <span class="dt">Just</span> <span class="fu">$</span> <span class="kw">if</span> i <span class="fu">&lt;</span> j <span class="kw">then</span> <span class="dt">ValueConstInt</span> <span class="dv">0</span> <span class="kw">else</span> <span class="dt">ValueConstInt</span> <span class="dv">1</span>
+    <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> <span class="fu">$</span> boolToInt (i <span class="fu">&lt;</span> j)
+
 tryFoldInst (<span class="dt">InstAnd</span> (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> j)) <span class="fu">=</span> 
     <span class="dt">Just</span> <span class="fu">$</span> <span class="dt">ValueConstInt</span> (i <span class="fu">*</span> j)
 tryFoldInst i <span class="fu">=</span> <span class="dt">Nothing</span>
@@ -130,11 +136,11 @@ runTillStable f a <span class="fu">=</span> <span class="kw">let</span> a&#39; <
     <span class="kw">else</span> f a&#39;
 
 <span class="ot">transformConstantFold ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
-transformConstantFold <span class="fu">=</span> runTillStable (dceProgram <span class="fu">.</span> foldProgram)  <span class="kw">where</span>
+transformConstantFold <span class="fu">=</span>  dceProgram <span class="fu">.</span> (runTillStable foldProgram)  <span class="kw">where</span>
 
     <span class="co">-- | Collection of instruction names and values</span>
 <span class="ot">    foldableInsts ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> [(<span class="dt">Label</span> <span class="dt">Inst</span>, <span class="dt">Value</span>)]
-    foldableInsts p <span class="fu">=</span> foldMapIRProgramBBs (foldMapBB (collectFoldableInsts) (const mempty)) p
+    foldableInsts p <span class="fu">=</span> foldMapProgramBBs (foldMapBB (collectFoldableInsts) (const mempty)) p
 
     <span class="co">-- | Program after constant folding</span>
 <span class="ot">    foldProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
@@ -142,7 +148,7 @@ transformConstantFold <span class="fu">=</span> runTillStable (dceProgram <span 
 
     <span class="co">-- | program after dead code elimination</span>
 <span class="ot">    dceProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span>
-    dceProgram program <span class="fu">=</span> 
-        foldl (\p name <span class="ot">-&gt;</span> mapIRProgramBBs (removeInstFromBB name) p) program (map fst (foldableInsts program))</code></pre></div>
+    dceProgram program <span class="fu">=</span>
+        foldl (\p name <span class="ot">-&gt;</span> filterProgramInsts (not <span class="fu">.</span> hasName name) p) program (map fst (foldableInsts program))</code></pre></div>
 </body>
 </html>

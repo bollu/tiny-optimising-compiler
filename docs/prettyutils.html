@@ -50,6 +50,7 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc.Render.Text</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span>
 <span class="kw">import qualified</span> <span class="dt">Data.Text.Lazy</span> <span class="kw">as</span> <span class="dt">L</span>
+
 <span class="ot">docToText ::</span> <span class="dt">Doc</span> ann <span class="ot">-&gt;</span> <span class="dt">L.Text</span>
 docToText doc <span class="fu">=</span> renderLazy (layoutPretty defaultLayoutOptions doc)
 

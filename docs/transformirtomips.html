@@ -1,0 +1,279 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<h1>
+Transform Pass: IR Canonicalization for MIPS
+</h1>
+<h2>
+Introduction
+</h2>
+<h4>
+In this pass, we rewrite binary instructions of the form:
+</h4>
+<ul>
+<li><code>&lt;inst&gt; &lt;int&gt; &lt;ref&gt;</code></li>
+<li><p><code>&lt;inst&gt; &lt;ref&gt; &lt;int&gt;</code> to</p>
+<pre><code>&lt;inst&gt; &lt;int&gt; &lt;ref&gt;</code></pre></li>
+</ul>
+<h4>
+We assume that constant folding has already taken place, so we cannot have:
+</h4>
+<pre><code>&lt;inst&gt; &lt;int&gt; &lt;int&gt;</code></pre>
+<h4>
+We will leave:
+</h4>
+<ul>
+<li><code>&lt;inst&gt; &lt;ref&gt; &lt;ref&gt;</code> as-is.</li>
+</ul>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE ViewPatterns #-}</span>
+
+<span class="kw">module</span> <span class="dt">TransformIRToMIPS</span> <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">TransformMem2Reg</span> (mkCFG, <span class="dt">CFG</span>)
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Graph</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Debug.Trace</span>(trace)
+<span class="kw">import </span><span class="dt">MIPSAsm</span>
+
+<span class="co">-- | Convert a label of an instruction to a virtual register.</span>
+<span class="ot">lblToReg ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span>
+lblToReg lbl <span class="fu">=</span> <span class="dt">MRegVirtual</span> (unsafeTransmuteLabel lbl)
+
+<span class="co">-- | Create a MachineInst for those IR instructions which have two equivalent</span>
+<span class="co">-- | MachineInsts:</span>
+<span class="co">-- | One that can take an immediate mode `Int` value, and another that takes</span>
+<span class="co">-- | two registers</span>
+<span class="ot">mkMInstForBinOpFromVariants ::</span> 
+    <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^ Destination name</span>
+    <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="co">-- ^ 1st binary operand `a&#39;</span>
+    <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="co">-- ^ 2nd binary operand</span>
+    <span class="ot">-&gt;</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>) <span class="co">-- ^ Constructor for the instruction</span>
+                                       <span class="co">-- that uses two registers as operands.</span>
+    <span class="ot">-&gt;</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>) <span class="co">-- ^ Constructor for the instruction that </span>
+                                      <span class="co">-- uses a register and an immediate value.</span>
+    <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+mkMInstForBinOpFromVariants dstlbl (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueInstRef</span> v) _ cimm <span class="fu">=</span> 
+    cimm (lblToReg dstlbl) (lblToReg v) i
+
+mkMInstForBinOpFromVariants dstlbl (<span class="dt">ValueInstRef</span> v) (<span class="dt">ValueConstInt</span> i) _ cimm <span class="fu">=</span> 
+    cimm (lblToReg dstlbl) (lblToReg v) i 
+
+mkMInstForBinOpFromVariants dstlbl (<span class="dt">ValueInstRef</span> v) (<span class="dt">ValueInstRef</span> v&#39;) creg _ <span class="fu">=</span> 
+    creg (lblToReg dstlbl) (lblToReg v) (lblToReg v&#39;)
+
+mkMInstForBinOpFromVariants dstlbl (<span class="dt">ValueConstInt</span> i) (<span class="dt">ValueConstInt</span> i&#39;) creg _<span class="fu">=</span> 
+    error <span class="fu">.</span> docToString <span class="fu">$</span> vcat  
+        [pretty <span class="st">&quot;expected instruction to be constant folded&quot;</span>,
+         pretty <span class="st">&quot;Found illegal operands:&quot;</span>,
+         pretty dstlbl <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:= f(&quot;</span> <span class="fu">&lt;+&gt;</span> 
+         pretty i <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;,&quot;</span> <span class="fu">&lt;+&gt;</span> pretty i <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;)&quot;</span>]
+
+
+<span class="co">-- | Transform an `Inst` to a sequence of `MInst`</span>
+<span class="ot">transformInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> [<span class="dt">MInst</span>] 
+transformInst (<span class="dt">Named</span> dest (<span class="dt">InstAdd</span> a b)) <span class="fu">=</span>
+    [mkMInstForBinOpFromVariants dest a b <span class="dt">Madd</span> <span class="dt">Maddi</span>]
+
+transformInst (<span class="dt">Named</span> dest (<span class="dt">InstL</span> a b)) <span class="fu">=</span>
+    [mkMInstForBinOpFromVariants dest a b <span class="dt">Mslt</span> <span class="dt">Mslti</span>]
+
+<span class="co">-- | Note that for now, we assume that multiplication never happens between </span>
+<span class="co">-- | constants.</span>
+transformInst (<span class="dt">Named</span> dest (<span class="dt">InstMul</span> (<span class="dt">ValueInstRef</span> a) (<span class="dt">ValueInstRef</span> b))) <span class="fu">=</span>
+    [<span class="dt">Mmult</span> (lblToReg a) (lblToReg b), <span class="dt">Mmflo</span> (lblToReg dest)]
+
+<span class="co">-- | A phi node is simply &quot;coalesced&quot; in the preceding basic blocks.</span>
+<span class="co">-- | @see emitFusePhi, transformBB.</span>
+transformInst (<span class="dt">Named</span> _ (<span class="dt">InstPhi</span> _)) <span class="fu">=</span> []
+
+transformInst inst <span class="fu">=</span>
+    error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;unimplemented lowering for Inst: &quot;</span> <span class="fu">&lt;+&gt;</span>
+        pretty inst
+
+
+<span class="co">-- | Make a MInst that sets a MReg to a value.</span>
+<span class="ot">mkMInstSetRegToVal ::</span> <span class="dt">MReg</span> <span class="co">-- ^ Register to set</span>
+                        <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="co">-- ^ Value to use the register to</span>
+                        <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+mkMInstSetRegToVal reg (<span class="dt">ValueConstInt</span> i) <span class="fu">=</span> 
+    <span class="dt">Mli</span> reg i
+mkMInstSetRegToVal reg (<span class="dt">ValueInstRef</span> lbl) <span class="fu">=</span> 
+    mkMov reg (lblToReg lbl)
+
+<span class="co">-- | Code needed in $v0 to issue &quot;print integer&quot;.</span>
+<span class="ot">codePrintInt ::</span> <span class="dt">Int</span>
+codePrintInt <span class="fu">=</span> <span class="dv">1</span>
+
+<span class="co">-- | Code needed in $v0 to issue exit.</span>
+<span class="ot">codeExit ::</span> <span class="dt">Int</span>
+codeExit <span class="fu">=</span> <span class="dv">10</span>
+
+<span class="co">-- | Transform a `RetInst` into possible `MInsts` and a terminator inst.</span>
+<span class="ot">transformRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> ([<span class="dt">MInst</span>], [<span class="dt">MTerminatorInst</span>])
+transformRetInst (<span class="dt">RetInstRet</span> v) <span class="fu">=</span> 
+    ([mkMInstSetRegToVal rega0 v,
+      <span class="dt">Mli</span> regv0 codePrintInt,
+      <span class="dt">Msyscall</span>,
+      <span class="dt">Mli</span> regv0 codeExit,
+      <span class="dt">Msyscall</span>],
+      [<span class="dt">Mexit</span>])
+
+transformRetInst (<span class="dt">RetInstTerminal</span>) <span class="fu">=</span> 
+    ([<span class="dt">Mli</span> regv0 codeExit,
+      <span class="dt">Msyscall</span>], [<span class="dt">Mexit</span>])
+
+transformRetInst (<span class="dt">RetInstBranch</span> lbl) <span class="fu">=</span> 
+    ([], [<span class="dt">Mbeqz</span> regZero (unsafeTransmuteLabel lbl)])
+
+transformRetInst (<span class="dt">RetInstConditionalBranch</span> 
+    (<span class="dt">ValueInstRef</span> (unsafeTransmuteLabel <span class="ot">-&gt;</span> condlbl))
+    (unsafeTransmuteLabel <span class="ot">-&gt;</span> thenlbl)
+    (unsafeTransmuteLabel <span class="ot">-&gt;</span> elselbl)) <span class="fu">=</span> 
+        ([], 
+        [<span class="dt">Mbgtz</span> (<span class="dt">MRegVirtual</span> condlbl) thenlbl,
+         <span class="dt">Mj</span> elselbl])
+
+<span class="co">-- | Shortcut a jump from a branch of &quot;0&quot; to a direct jump</span>
+<span class="co">-- | Note that these should ideally be fused in a previous pass</span>
+<span class="co">-- | TODO: implement BB fusion.</span>
+transformRetInst (<span class="dt">RetInstConditionalBranch</span> 
+    (<span class="dt">ValueConstInt</span> <span class="dv">0</span>) _ (unsafeTransmuteLabel <span class="ot">-&gt;</span> elselbl)) <span class="fu">=</span> 
+        ([], [<span class="dt">Mj</span> elselbl])
+
+<span class="co">-- | Shortcut a jump from a branch of &quot;1&quot; to a direct jump</span>
+<span class="co">-- | Note that these should ideally be fused in a previous pass</span>
+<span class="co">-- | TODO: implement BB fusion.</span>
+
+transformRetInst (<span class="dt">RetInstConditionalBranch</span> 
+    (<span class="dt">ValueConstInt</span> <span class="dv">1</span>) (unsafeTransmuteLabel <span class="ot">-&gt;</span> thenlbl) _)  <span class="fu">=</span> 
+        ([], [<span class="dt">Mj</span> thenlbl])
+
+
+transformRetInst retinst <span class="fu">=</span> 
+    error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;unimplemented lowering for RetInst: &quot;</span> <span class="fu">&lt;+&gt;</span>
+        pretty retinst
+
+<span class="co">-- | Emit code such that if the current basic block jumps to a basic block</span>
+<span class="co">-- | that has a phi node, we write to a register that the phi node would have</span>
+<span class="co">-- | occupied.</span>
+<span class="ot">emitFusePhi ::</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> 
+            <span class="dt">IRBBId</span> <span class="co">-- ^ The basic block to emit code to handle phi nodes of successors</span>
+            <span class="ot">-&gt;</span> [<span class="dt">MInst</span>] <span class="co">-- ^ Instructions that store values into phi nodes.</span>
+emitFusePhi cfg <span class="dt">Program</span>{programBBMap<span class="fu">=</span>bbmap} curbbid <span class="fu">=</span>
+    <span class="kw">let</span>
+        <span class="co">-- | Make an instruction that stores a Value into the phi node,</span>
+<span class="ot">        mkStoreForPhi ::</span> <span class="dt">Label</span> <span class="dt">Inst</span> <span class="co">-- ^ Label of the Phi node</span>
+                         <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="co">-- ^ Value to store in the Phi node</span>
+                         <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+        mkStoreForPhi (unsafeTransmuteLabel <span class="ot">-&gt;</span> phiname) val <span class="fu">=</span> 
+            mkMInstSetRegToVal (<span class="dt">MRegVirtual</span> phiname) val
+    <span class="kw">in</span> 
+    trace (docToString <span class="fu">$</span> pretty <span class="st">&quot;successors(&quot;</span> <span class="fu">&lt;+&gt;</span> pretty curbbid <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;): &quot;</span>
+           <span class="fu">&lt;+&gt;</span> hcat  (map pretty succphis) )
+    (map (uncurry mkStoreForPhi) succPhiReferences)
+    <span class="kw">where</span>
+        <span class="co">-- | BBs that are successors in the CFG</span>
+<span class="ot">        succbbs ::</span> [<span class="dt">IRBB</span>]
+        succbbs <span class="fu">=</span> fmap (bbmap <span class="fu">M.!</span>) (getImmediateChildren cfg curbbid)
+        <span class="co">-- | Phi nodes of all successor basic blocks</span>
+<span class="ot">        succphis ::</span> [<span class="dt">Named</span> <span class="dt">Inst</span>]
+        succphis <span class="fu">=</span> succbbs <span class="fu">&gt;&gt;=</span> getIRBBPhis
+        <span class="co">-- | Names of variables referred to by successors of current BB</span>
+        <span class="co">-- | LHS is the phi node name.</span>
+        <span class="co">-- | RHS is the source inst name.</span>
+<span class="ot">        succPhiReferences ::</span> [(<span class="dt">Label</span> <span class="dt">Inst</span>, <span class="dt">Value</span>)]
+        succPhiReferences <span class="fu">=</span> succphis <span class="fu">&gt;&gt;=</span> \(<span class="dt">Named</span> phiname phi) <span class="ot">-&gt;</span> 
+            <span class="kw">case</span> getPhiValueForBB curbbid phi <span class="kw">of</span>
+                <span class="dt">Just</span> val <span class="ot">-&gt;</span> [(phiname, val)]
+                _ <span class="ot">-&gt;</span> []
+      
+
+
+<span class="co">-- | Transform an IR basic block to a machine Basic Block</span>
+<span class="ot">transformBB ::</span> <span class="dt">CFG</span> <span class="ot">-&gt;</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">IRBB</span> <span class="ot">-&gt;</span> <span class="dt">MBB</span>
+transformBB cfg program (bb<span class="fu">@</span><span class="dt">BasicBlock</span> {
+        bbInsts<span class="fu">=</span>insts,
+        bbRetInst<span class="fu">=</span>retinst,
+        bbLabel<span class="fu">=</span>curbbid
+    }) <span class="fu">=</span> <span class="dt">BasicBlock</span> {
+        bbLabel<span class="fu">=</span>unsafeTransmuteLabel curbbid,
+        bbInsts<span class="fu">=</span>insts&#39; <span class="fu">++</span> instsFromSucceedingPhi <span class="fu">++</span> instsFromRet,
+        bbRetInst<span class="fu">=</span>retinst&#39;
+    } <span class="kw">where</span>
+        insts&#39; <span class="fu">=</span> insts <span class="fu">&gt;&gt;=</span> transformInst
+        (instsFromRet, retinst&#39;) <span class="fu">=</span> transformRetInst retinst
+        instsFromSucceedingPhi <span class="fu">=</span> emitFusePhi cfg program curbbid</code></pre></div>
+<p>SPIM assumes that our entry label is called <code>main</code>. To stick to the convention, we re-label our entry basic block to <code>main</code>.</p>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">addJumpToEntry ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+addJumpToEntry entrybbid mprogram<span class="fu">@</span><span class="dt">Program</span>{
+        programBBMap<span class="fu">=</span>bbmap
+    } <span class="fu">=</span> mprogram {
+        programBBMap <span class="fu">=</span> M.insert (<span class="dt">Label</span> <span class="st">&quot;main&quot;</span>) mainBB bbmap,
+        programEntryBBId <span class="fu">=</span> <span class="dt">Label</span> <span class="st">&quot;main&quot;</span>
+} <span class="kw">where</span>
+    <span class="co">-- | Have a basic block whose only job is to jump to the actual entry</span>
+    mainBB <span class="fu">=</span> <span class="dt">BasicBlock</span> {
+        bbInsts<span class="fu">=</span>[],
+        bbRetInst<span class="fu">=</span>[<span class="dt">Mj</span> (unsafeTransmuteLabel entrybbid)],
+        bbLabel<span class="fu">=</span><span class="dt">Label</span> <span class="st">&quot;main&quot;</span>
+    }</code></pre></div>
+Finally, we write the interface to our transformation as a function <code>transformIRToMIPS</code>.
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">transformIRToMIPS ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+transformIRToMIPS p <span class="fu">=</span> 
+    addJumpToEntry (programEntryBBId p) (mapProgramBBs (transformBB cfg p) p) <span class="kw">where</span>
+        cfg <span class="fu">=</span> mkCFG (programBBMap p)</code></pre></div>
+</body>
+</html>

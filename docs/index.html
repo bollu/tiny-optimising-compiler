@@ -15,14 +15,17 @@ Tiny optimising compiler
 <p>Welcome to the tutorial series that teaches how to write a tiny optimising compiler in haskell!</p>
 <p>Start from:</p>
 <ol style="list-style-type: decimal">
-<li><p><a href="language.html">The source language</a></p></li>
-<li><p><a href="parser.html">The parser for the language</a></p></li>
-<li><p><a href="ir.html">The internal representation</a></p></li>
-<li><p><a href="transformmem2reg.html">The <code>mem2reg</code> transform that lands us into <code>SSA</code></a></p></li>
-</ol>
+<li><p><a href="language.html">The source language.</a></p></li>
+<li><p><a href="parser.html">The parser for the language.</a></p></li>
+<li><p><a href="ir.html">The internal representation.</a></p></li>
+<li><p><a href="transformmem2reg.html">The <code>mem2reg</code> transform that lands us into <code>SSA</code>.</a></p></li>
+<li><p><a href="transformconstantfolding.html">The <code>constant folding</code> transform that exploits <code>SSA</code> to &quot;fold away&quot; expressions which can be evaluated at compile time.</a></p></li>
+<li><p><a href="registerallocation.html">The <code>register allocation</code> transform which allocates physical registers to the infinite virtual registers of our SSA form.</a></p></li>
+<li><a href="MIPSAsm.html">The <code>mipsasm</code> final code generation pass which generates MIPS assembly.</a>
 <h2>
 Background
-</h2>
+</h2></li>
+</ol>
 <p>I've wanted to write this for a while: a tiny <em>optimising</em> compiler for a small imperative ish language.</p>
 <p>I want to show off modern compiler ideas, such as:</p>
 <ul>
@@ -48,22 +51,27 @@ Non goals
 Timeline
 </h4>
 <ul>
-<li>[x] Parse</li>
-<li>[x] Generate non-SSA IR</li>
-<li>[x] Convert non-SSA to SSA (<code>Mem2Reg</code> is the pass where this happens.)</li>
-<li>[ ] generate MIPS assembly from SSA IR (half-done)</li>
-<li>[ ] (Optional) generate LLVM for SSA IR (Can be pulled from <a href="http://github.com/bollu/simplexhc">simplexhc</a>)</li>
+<li><code>[x]</code> Parse</li>
+<li><code>[x]</code> Generate non-SSA IR</li>
+<li><code>[x]</code> Convert non-SSA to SSA (<code>Mem2Reg</code> is the pass where this happens.)</li>
+<li><code>[x]</code> generate MIPS assembly from SSA IR (half-done)</li>
+<li><code>[ ]</code> (Optional) generate LLVM for SSA IR (Can be pulled from <a href="http://github.com/bollu/simplexhc">simplexhc</a>)</li>
 </ul>
 <p>At this point, we have a &quot;functioning&quot; compiler. Now, we can extend the compiler or the language. I want to show off optimisations, so I will spend more time implementing optimisations</p>
 <ul>
-<li>[ ] Loop detection.</li>
-<li>[ ] Scalar evolution.</li>
-<li>[ ] Global value numbering.</li>
-<li>[ ] Dead code elimination.</li>
-<li>[ ] Loop unrolling.</li>
-<li>[ ] invariant load hoisting.</li>
+<li><code>[ ]</code> Loop detection.</li>
+<li><code>[ ]</code> Scalar evolution.</li>
+<li><code>[ ]</code> Global value numbering.</li>
+<li><code>[ ]</code> Dead code elimination.</li>
+<li><code>[ ]</code> Loop unrolling.</li>
+<li><code>[ ]</code> invariant load hoisting.</li>
 </ul>
-<p>Note that we do not yet have functions in the language! let's add that. - [ ] extend language with functions. - [ ] generate MIPS for functions. - [ ] Inlining.</p>
+<p>Note that we do not yet have functions in the language! let's add that.</p>
+<ul>
+<li><code>[ ]</code> extend language with functions.</li>
+<li><code>[ ]</code> generate MIPS for functions.</li>
+<li><code>[ ]</code> Inlining.</li>
+</ul>
 <p>If we get here, we can then add polyhedral abilities to the compiler. For this though, we would need to integrate with <code>isl</code>. <strong>Someone</strong> will need to write haskell bindings <code>:)</code>.</p>
 </body>
 </html>

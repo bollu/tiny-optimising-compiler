@@ -47,159 +47,249 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 </head>
 <body>
 <div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE DeriveAnyClass #-}</span>
-<span class="kw">module</span> <span class="dt">MIPSAsm</span>(generateASM, <span class="dt">ASMDoc</span>(<span class="fu">..</span>)) <span class="kw">where</span>
+<span class="ot">{-# LANGUAGE GADTs #-}</span>
+<span class="ot">{-# LANGUAGE TypeFamilies #-}</span>
+
+<span class="kw">module</span> <span class="dt">MIPSAsm</span>(<span class="dt">MReg</span>(<span class="fu">..</span>),
+<span class="dt">MRegLabel</span>,
+mkTemporaryReg,
+<span class="dt">MBBLabel</span>,
+<span class="dt">MBB</span>,
+<span class="dt">MProgram</span>,
+<span class="dt">MInst</span>(<span class="fu">..</span>),
+mkMov,
+regToString,
+<span class="dt">MTerminatorInst</span>(<span class="fu">..</span>),
+regZero,
+rega0,
+regv0,
+regsp,
+printMIPSAsm,
+traverseMInstReg,
+mapMInstReg,
+foldMapMInstReg,
+getMInstRegs,
+traverseMTerminatorInstReg,
+mapMTerminatorInstReg,
+getTerminatorInstSuccessor,
+<span class="dt">MCFG</span>,
+mkMCFG ) <span class="kw">where</span>
 <span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
 <span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
 <span class="kw">import </span><span class="dt">Data.Traversable</span>
 <span class="kw">import </span><span class="dt">Data.Foldable</span>
 <span class="kw">import </span><span class="dt">Control.Applicative</span>
 <span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
-<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
 <span class="kw">import </span><span class="dt">PrettyUtils</span>
-
-<span class="co">-- This module assumes that constants in all parameters are canonicalized</span>
-<span class="co">-- to be the second parameter.</span>
-
-<span class="co">-- | Parameter to MIPS Instructions</span>
-<span class="kw">type</span> <span class="dt">MIPSParam</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
-
-<span class="co">-- | Instruction Name</span>
-<span class="kw">type</span> <span class="dt">MIPSInstName</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
-
-<span class="co">-- | a Mips instruction</span>
-<span class="kw">type</span> <span class="dt">MIPSInst</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
-
-<span class="co">-- | a mips register name</span>
-<span class="kw">type</span> <span class="dt">MIPSRegName</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
-
-<span class="co">-- | a mips label</span>
-<span class="kw">type</span> <span class="dt">MIPSLabel</span> <span class="fu">=</span> <span class="dt">Doc</span> ()
-
-<span class="kw">data</span> <span class="dt">ASMContext</span> <span class="fu">=</span> <span class="dt">ASMContext</span> {
-<span class="ot">    instToReg ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="dt">MIPSParam</span>,
-<span class="ot">    insts ::</span> [<span class="dt">MIPSInst</span>],
-<span class="ot">    irprogram ::</span> <span class="dt">IRProgram</span>
-}
-
-<span class="ot">initASMContext ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">ASMContext</span>
-initASMContext program <span class="fu">=</span> <span class="dt">ASMContext</span> {
-  instToReg<span class="fu">=</span>mempty,
-  insts<span class="fu">=</span>mempty,
-  irprogram<span class="fu">=</span>program
-}
+<span class="kw">import </span><span class="dt">Data.MonoTraversable</span>
+<span class="kw">import </span><span class="dt">Data.Functor.Identity</span>(<span class="dt">Identity</span>(..), runIdentity)
+<span class="kw">import qualified</span> <span class="dt">Data.Monoid</span> <span class="kw">as</span> <span class="dt">Monoid</span>
+<span class="kw">import </span><span class="dt">Graph</span>
+<span class="kw">import </span><span class="dt">Data.Maybe</span>(maybeToList)
 
 
 
-<span class="kw">newtype</span> <span class="dt">ASMDoc</span> <span class="fu">=</span> <span class="dt">ASMDoc</span> {<span class="ot"> unASMDoc ::</span> <span class="dt">Doc</span> () }
+<span class="kw">type</span> <span class="dt">MRegLabel</span> <span class="fu">=</span> <span class="dt">Label</span> <span class="dt">MReg</span>
 
-<span class="co">-- | The zero register</span>
-<span class="ot">zeroReg ::</span> <span class="dt">MIPSRegName</span>
-zeroReg <span class="fu">=</span> pretty <span class="st">&quot;$zero&quot;</span>
-
-<span class="co">-- | Compile an instruction that sets a particular register value</span>
-<span class="ot">compileSetRegisterValue ::</span> <span class="dt">MIPSRegName</span>  <span class="ot">-&gt;</span> <span class="dt">MIPSParam</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-compileSetRegisterValue regname param <span class="fu">=</span>
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;ori&quot;</span> <span class="fu">&lt;+&gt;</span> regname <span class="fu">&lt;+&gt;</span> zeroReg <span class="fu">&lt;+&gt;</span> param
+<span class="co">-- A register for our machine instructions.</span>
+<span class="kw">data</span> <span class="dt">MReg</span> <span class="fu">=</span> <span class="dt">MRegVirtual</span> <span class="dt">MRegLabel</span> <span class="fu">|</span> <span class="dt">MRegReal</span> <span class="dt">String</span> <span class="kw">deriving</span>(<span class="dt">Eq</span>, <span class="dt">Ord</span>)
 
 
+<span class="co">-- | Convert from a register to a stringified name.</span>
+<span class="ot">regToString ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">String</span>
+regToString (<span class="dt">MRegVirtual</span> (<span class="dt">Label</span> name)) <span class="fu">=</span> name
+regToString (<span class="dt">MRegReal</span> name) <span class="fu">=</span> name
 
-<span class="co">-- | append a MIPSInst to the ASMContext</span>
-<span class="ot">appendMIPSInst ::</span> <span class="dt">MIPSInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-appendMIPSInst mi <span class="fu">=</span> modify (\ctx <span class="ot">-&gt;</span> ctx {insts<span class="fu">=</span>(insts ctx) <span class="fu">++</span> [mi]})
+<span class="ot">regZero ::</span> <span class="dt">MReg</span>
+regZero <span class="fu">=</span> <span class="dt">MRegReal</span> <span class="st">&quot;zero&quot;</span>
 
-<span class="co">-- | Compile binary operator</span>
-<span class="ot">compileBinaryOp ::</span> <span class="dt">MIPSInstName</span> <span class="ot">-&gt;</span>  <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-compileBinaryOp name v1 v2 <span class="fu">=</span> <span class="kw">do</span>
-    p1 <span class="ot">&lt;-</span> compileValue v1
-    p2 <span class="ot">&lt;-</span> compileValue v2
-    appendMIPSInst <span class="fu">$</span> name <span class="fu">&lt;+&gt;</span> p1 <span class="fu">&lt;+&gt;</span> p2
+<span class="ot">rega0 ::</span> <span class="dt">MReg</span>
+rega0 <span class="fu">=</span> <span class="dt">MRegReal</span> <span class="st">&quot;a0&quot;</span>
 
-<span class="co">-- | Compile Instruction.</span>
-<span class="ot">appendInst ::</span> <span class="dt">Named</span> <span class="dt">Inst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span><span class="dt">InstAlloc</span>} <span class="fu">=</span> error <span class="st">&quot;alloc should not be present in SSA&quot;</span>
-appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span>inst<span class="fu">@</span>(<span class="dt">InstStore</span> _ _)} <span class="fu">=</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
-    pretty inst <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;should not be present in SSA&quot;</span>
-appendInst <span class="dt">Named</span> {namedData<span class="fu">=</span>inst<span class="fu">@</span>(<span class="dt">InstLoad</span> _)} <span class="fu">=</span> error <span class="fu">.</span> docToString <span class="fu">$</span>
-    pretty inst <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;should not be present in SSA&quot;</span>
+<span class="ot">regv0 ::</span> <span class="dt">MReg</span>
+regv0 <span class="fu">=</span> <span class="dt">MRegReal</span> <span class="st">&quot;v0&quot;</span>
 
-<span class="co">-- | compile a ret inst</span>
-<span class="ot">appendRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-appendRetInst (<span class="dt">RetInstRet</span> val) <span class="fu">=</span> <span class="kw">do</span>
-    param <span class="ot">&lt;-</span> compileValue val
-    <span class="co">-- | 1 is the ID of print_int</span>
-    compileSetRegisterValue (pretty <span class="st">&quot;$v0&quot;</span>) (pretty (<span class="dv">1</span><span class="ot"> ::</span> <span class="dt">Int</span>))
-    compileSetRegisterValue (pretty <span class="st">&quot;$a0&quot;</span>) param
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;syscall&quot;</span>
-
-    <span class="co">-- | 10 is the ID of terminate</span>
-    compileSetRegisterValue (pretty <span class="st">&quot;$v0&quot;</span>) (pretty (<span class="dv">10</span><span class="ot"> ::</span> <span class="dt">Int</span>))
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;syscall&quot;</span>
-
-appendRetInst (<span class="dt">RetInstBranch</span> lbl) <span class="fu">=</span> <span class="kw">do</span>
-    mipslabel <span class="ot">&lt;-</span> compileBBLabel lbl
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;j&quot;</span> <span class="fu">&lt;+&gt;</span> mipslabel
+<span class="co">-- | Stack pointer register</span>
+<span class="ot">regsp ::</span> <span class="dt">MReg</span>
+regsp <span class="fu">=</span> <span class="dt">MRegReal</span> <span class="st">&quot;sp&quot;</span>
 
 
-appendRetInst (<span class="dt">RetInstConditionalBranch</span> cond tlabel flabel) <span class="fu">=</span> <span class="kw">do</span>
-    tmipslabel <span class="ot">&lt;-</span> compileBBLabel tlabel
-    fmipslabel <span class="ot">&lt;-</span> compileBBLabel flabel
-    condparam <span class="ot">&lt;-</span> compileValue cond
-    <span class="co">-- | if cond != 0, goto true</span>
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;bne&quot;</span> <span class="fu">&lt;+&gt;</span> condparam <span class="fu">&lt;+&gt;</span> zeroReg <span class="fu">&lt;+&gt;</span> tmipslabel
-    appendMIPSInst <span class="fu">$</span> pretty <span class="st">&quot;j&quot;</span> <span class="fu">&lt;+&gt;</span> fmipslabel
+<span class="co">-- | Count from 0. Make the `n`th temporary register.</span>
+<span class="co">-- | There are 8 of these. </span>
+<span class="ot">mkTemporaryReg ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span>
+mkTemporaryReg n <span class="fu">=</span>
+    <span class="kw">if</span> n <span class="fu">&gt;</span> <span class="dv">7</span> <span class="fu">||</span> n <span class="fu">&lt;</span> <span class="dv">0</span>
+    <span class="kw">then</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;expected 0 &lt;= n &lt;= 7, found:&quot;</span> <span class="fu">&lt;+&gt;</span> pretty n
+    <span class="kw">else</span> <span class="dt">MRegReal</span> (<span class="st">&quot;t&quot;</span> <span class="fu">++</span> show n)
 
-<span class="co">-- | Construct a `Param` from `Value</span>
-<span class="ot">compileValueRaw_ ::</span> <span class="dt">ASMContext</span> <span class="ot">-&gt;</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">MIPSParam</span>
-compileValueRaw_ _(<span class="dt">ValueConstInt</span> i) <span class="fu">=</span> pretty i
-compileValueRaw_ ctx (<span class="dt">ValueInstRef</span> name) <span class="fu">=</span>
-    <span class="kw">case</span> M.lookup name  (instToReg ctx) <span class="kw">of</span>
-        <span class="dt">Just</span> param <span class="ot">-&gt;</span> param
-        <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;not in instToReg&quot;</span>
 
-<span class="co">-- | State version of `compileValueRaw_`</span>
-<span class="ot">compileValue ::</span> <span class="dt">Value</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> <span class="dt">MIPSParam</span>
-compileValue value <span class="fu">=</span> gets (\ctx <span class="ot">-&gt;</span> compileValueRaw_ ctx value)
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">MReg</span> <span class="kw">where</span>
+    pretty (<span class="dt">MRegReal</span> name) <span class="fu">=</span> pretty <span class="st">&quot;$&quot;</span> <span class="fu">PP.&lt;&gt;</span> pretty name
+    pretty (<span class="dt">MRegVirtual</span> i) <span class="fu">=</span> pretty <span class="st">&quot;$virt-&quot;</span> <span class="fu">PP.&lt;&gt;</span> pretty i
 
-<span class="ot">entryBBLabel ::</span> <span class="dt">State</span> <span class="dt">ASMContext</span> (<span class="dt">Label</span> <span class="dt">BasicBlock</span>)
-entryBBLabel <span class="fu">=</span>
-    gets (\ctx <span class="ot">-&gt;</span> <span class="kw">let</span>
-<span class="ot">                    program ::</span> <span class="dt">IRProgram</span>
-                    program <span class="fu">=</span> irprogram ctx
 
-<span class="ot">                    entrybbid ::</span> <span class="dt">BBId</span>
-                    entrybbid <span class="fu">=</span> irProgramEntryBBId program
+<span class="kw">data</span> <span class="dt">MInst</span> <span class="kw">where</span>
+    <span class="dt">Mli</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mmflo</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Madd</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Maddi</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mori</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mslt</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mslti</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mmult</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="co">-- | Store a register word with an immediate mode offset and a base register.</span>
+    <span class="dt">Msw</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="co">-- | Load into a register from a base register plus an immediate mode offset</span>
+    <span class="dt">Mlw</span><span class="ot"> ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Mcomment</span><span class="ot"> ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+    <span class="dt">Msyscall</span><span class="ot"> ::</span> <span class="dt">MInst</span>
 
-<span class="ot">                    entrybb ::</span> <span class="dt">BasicBlock</span>
-                    entrybb <span class="fu">=</span> (irProgramBBMap program) <span class="fu">M.!</span> entrybbid
-                  <span class="kw">in</span> bbLabel entrybb)
+<span class="co">-- | Move into `dest` from `src</span>
+<span class="ot">mkMov ::</span> <span class="dt">MReg</span> <span class="co">-- ^ Destination register</span>
+        <span class="ot">-&gt;</span> <span class="dt">MReg</span>  <span class="co">-- ^ Source register</span>
+        <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+mkMov dest src <span class="fu">=</span> <span class="dt">Madd</span> dest regZero src
 
-<span class="co">-- | convert a BB label to a MIPSLabel</span>
-<span class="ot">compileBBLabel ::</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> (<span class="dt">MIPSLabel</span>)
-compileBBLabel label <span class="fu">=</span> <span class="kw">do</span>
-    entrylabel <span class="ot">&lt;-</span> entryBBLabel
-    <span class="co">-- | Rename entry label to `main`</span>
-    <span class="kw">let</span> label&#39; <span class="fu">=</span> <span class="kw">if</span> entrylabel <span class="fu">==</span> label <span class="kw">then</span> (<span class="dt">Label</span> <span class="st">&quot;main&quot;</span>) <span class="kw">else</span> label
-    return <span class="fu">.</span> pretty <span class="fu">.</span> unLabel <span class="fu">$</span> label&#39;
+<span class="kw">type</span> <span class="kw">instance</span> <span class="dt">Element</span> <span class="dt">MInst</span> <span class="fu">=</span> <span class="dt">MReg</span>
 
-<span class="co">-- | Append a basic block label into the assembly.</span>
-<span class="ot">appendBBLabel ::</span> <span class="dt">Label</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-appendBBLabel lbl <span class="fu">=</span> <span class="kw">do</span>
-    mipslbl <span class="ot">&lt;-</span> compileBBLabel lbl
-    appendMIPSInst <span class="fu">$</span> mipslbl <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:&quot;</span>
+<span class="kw">instance</span> <span class="dt">MonoFunctor</span> <span class="dt">MInst</span> <span class="kw">where</span>
+    omap f (<span class="dt">Mli</span> reg i) <span class="fu">=</span> <span class="dt">Mli</span> (f reg) i
+    omap f (<span class="dt">Mmflo</span> reg) <span class="fu">=</span> <span class="dt">Mmflo</span> (f reg)
+    omap f (<span class="dt">Madd</span> r1 r2 r3) <span class="fu">=</span> <span class="dt">Madd</span> (f r1) (f r2) (f r3)
+    omap f (<span class="dt">Maddi</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Maddi</span> (f r1) (f r2) i
+    omap f (<span class="dt">Mori</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Mori</span> (f r1) (f r2) i
+    omap f (<span class="dt">Mslt</span> r1 r2 r3) <span class="fu">=</span> <span class="dt">Mslt</span> (f r1) (f r2) (f r3)
+    omap f (<span class="dt">Mslti</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Mori</span> (f r1) (f r2) i
+    omap f (<span class="dt">Mmult</span> r1 r2) <span class="fu">=</span> <span class="dt">Mmult</span> (f r1) (f r2)
+    omap f (<span class="dt">Msw</span> r1 i r2) <span class="fu">=</span> <span class="dt">Msw</span> (f r1) i (f r2)
+    omap f (<span class="dt">Mlw</span> r1 i r2) <span class="fu">=</span> <span class="dt">Mlw</span> (f r1) i (f r2)
+    omap _ (<span class="dt">Mcomment</span> s) <span class="fu">=</span> <span class="dt">Mcomment</span> s
 
-<span class="co">-- | Compile a Basic Block</span>
-<span class="ot">compileBB ::</span> <span class="dt">BasicBlock</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">ASMContext</span> ()
-compileBB bb <span class="fu">=</span> <span class="kw">do</span>
-    appendBBLabel (bbLabel bb)
-    for (bbInsts bb) appendInst
-    appendRetInst (bbRetInst bb)
+    omap _ <span class="dt">Msyscall</span> <span class="fu">=</span> <span class="dt">Msyscall</span>
 
-<span class="co">-- | Generate ASM</span>
-<span class="ot">generateASM ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">ASMDoc</span>
-generateASM program <span class="fu">=</span>
-  <span class="dt">ASMDoc</span> <span class="fu">$</span> vcat <span class="fu">$</span> insts <span class="fu">$</span> execState (<span class="kw">do</span>
-    <span class="co">-- | Compile all basic blocks</span>
-    for (M.elems (irProgramBBMap program)) compileBB) (initASMContext program)</code></pre></div>
+<span class="ot">traverseMInstReg ::</span> <span class="dt">Applicative</span> f <span class="ot">=&gt;</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> f <span class="dt">MReg</span>) <span class="ot">-&gt;</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> f <span class="dt">MInst</span>
+traverseMInstReg f (<span class="dt">Mli</span> reg i) <span class="fu">=</span> liftA2 <span class="dt">Mli</span> (f reg) (pure i)
+traverseMInstReg f (<span class="dt">Mmflo</span> reg) <span class="fu">=</span> <span class="dt">Mmflo</span> <span class="fu">&lt;$&gt;</span> (f reg)
+traverseMInstReg f (<span class="dt">Madd</span> r1 r2 r3) <span class="fu">=</span> <span class="dt">Madd</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2 <span class="fu">&lt;*&gt;</span> f r3
+traverseMInstReg f (<span class="dt">Maddi</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Maddi</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2 <span class="fu">&lt;*&gt;</span> pure i
+traverseMInstReg f (<span class="dt">Mori</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Mori</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2 <span class="fu">&lt;*&gt;</span> pure i
+traverseMInstReg f (<span class="dt">Mslt</span> r1 r2 r3) <span class="fu">=</span> <span class="dt">Mslt</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2 <span class="fu">&lt;*&gt;</span> f r3
+traverseMInstReg f (<span class="dt">Mslti</span> r1 r2 i) <span class="fu">=</span> <span class="dt">Mslti</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2 <span class="fu">&lt;*&gt;</span> pure i
+traverseMInstReg f (<span class="dt">Mmult</span> r1 r2) <span class="fu">=</span> <span class="dt">Mmult</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> f r2
+traverseMInstReg f (<span class="dt">Msw</span> r1 i r2) <span class="fu">=</span> <span class="dt">Msw</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> pure i <span class="fu">&lt;*&gt;</span> f r2
+traverseMInstReg f (<span class="dt">Mlw</span> r1 i r2) <span class="fu">=</span> <span class="dt">Mlw</span> <span class="fu">&lt;$&gt;</span> f r1 <span class="fu">&lt;*&gt;</span> pure i <span class="fu">&lt;*&gt;</span> f r2
+traverseMInstReg _ (<span class="dt">Mcomment</span> s) <span class="fu">=</span> pure (<span class="dt">Mcomment</span> s)
+traverseMInstReg f <span class="dt">Msyscall</span> <span class="fu">=</span> pure <span class="dt">Msyscall</span>
+
+<span class="ot">mapMInstReg ::</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span>) <span class="ot">-&gt;</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span>
+mapMInstReg f inst <span class="fu">=</span> runIdentity <span class="fu">$</span> traverseMInstReg (<span class="dt">Identity</span> <span class="fu">.</span> f) inst
+
+<span class="co">-- | Collect a monoidal value from MReg over an MInst</span>
+<span class="ot">foldMapMInstReg ::</span> <span class="dt">Monoid</span> m <span class="ot">=&gt;</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> m) <span class="ot">-&gt;</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> m
+foldMapMInstReg f inst <span class="fu">=</span> execState final Monoid.mempty <span class="kw">where</span>
+  <span class="co">-- go :: MReg -&gt; State m MReg</span>
+  go r <span class="fu">=</span> <span class="kw">do</span> 
+          modify (\m <span class="ot">-&gt;</span> m <span class="fu">Monoid.&lt;&gt;</span> f r)
+          return r
+
+  <span class="co">-- final :: State m Inst</span>
+  final <span class="fu">=</span> (traverseMInstReg go inst)
+
+
+<span class="ot">foldlMInstReg ::</span> (seed <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> seed) <span class="ot">-&gt;</span> seed <span class="ot">-&gt;</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> seed
+foldlMInstReg f seed inst <span class="fu">=</span> execState final seed <span class="kw">where</span>
+      <span class="co">-- go :: Reg -&gt; State seed Reg</span>
+      go r <span class="fu">=</span> <span class="kw">do</span> 
+              modify (\seed <span class="ot">-&gt;</span> f seed r)
+              return r
+
+      <span class="co">-- final :: State m MInst</span>
+      final <span class="fu">=</span> traverseMInstReg go inst 
+
+<span class="co">-- | Get the list of MRegs in a MInst</span>
+<span class="ot">getMInstRegs ::</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> [<span class="dt">MReg</span>]
+getMInstRegs <span class="fu">=</span> foldMapMInstReg (\r <span class="ot">-&gt;</span> [r])
+
+_<span class="ot">prettyMBinOp ::</span> (<span class="dt">Pretty</span> a, <span class="dt">Pretty</span> b, <span class="dt">Pretty</span> c) <span class="ot">=&gt;</span> 
+    <span class="dt">String</span> <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> b <span class="ot">-&gt;</span> c <span class="ot">-&gt;</span> <span class="dt">PP.Doc</span> doc
+_prettyMBinOp name a b c <span class="fu">=</span> pretty name <span class="fu">&lt;+&gt;</span> pretty a <span class="fu">&lt;+&gt;</span> pretty b <span class="fu">&lt;+&gt;</span> pretty c
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">MInst</span> <span class="kw">where</span>
+    pretty (<span class="dt">Mli</span> dest val) <span class="fu">=</span> pretty <span class="st">&quot;li&quot;</span> <span class="fu">&lt;+&gt;</span> pretty dest <span class="fu">&lt;+&gt;</span> pretty val
+    pretty (<span class="dt">Mmflo</span> dest) <span class="fu">=</span> pretty <span class="st">&quot;mflo&quot;</span> <span class="fu">&lt;+&gt;</span> pretty dest
+    pretty (<span class="dt">Madd</span> dest a b) <span class="fu">=</span> _prettyMBinOp <span class="st">&quot;add&quot;</span> dest a b
+    pretty (<span class="dt">Maddi</span> dest a b) <span class="fu">=</span> _prettyMBinOp <span class="st">&quot;addi&quot;</span> dest a b
+    pretty (<span class="dt">Mori</span> dest a b) <span class="fu">=</span> _prettyMBinOp <span class="st">&quot;ori&quot;</span> dest a b
+    pretty (<span class="dt">Mslt</span> dest a b) <span class="fu">=</span> _prettyMBinOp <span class="st">&quot;slt&quot;</span> dest a b
+    pretty (<span class="dt">Mslti</span> dest a b) <span class="fu">=</span> _prettyMBinOp <span class="st">&quot;slti&quot;</span> dest a b
+    pretty (<span class="dt">Mmult</span> a b) <span class="fu">=</span> pretty <span class="st">&quot;mult&quot;</span> <span class="fu">&lt;+&gt;</span> pretty a <span class="fu">&lt;+&gt;</span> pretty b
+    <span class="co">-- | Msw $src 20($s0)</span>
+    pretty (<span class="dt">Msw</span> a i b) <span class="fu">=</span> pretty <span class="st">&quot;sw&quot;</span> <span class="fu">&lt;+&gt;</span> pretty a <span class="fu">&lt;+&gt;</span> pretty i <span class="fu">PP.&lt;&gt;</span> parens (pretty b)
+    <span class="co">-- | Msw $dest 20($s0)</span>
+    pretty (<span class="dt">Mlw</span> a i b) <span class="fu">=</span> pretty <span class="st">&quot;lw&quot;</span> <span class="fu">&lt;+&gt;</span> pretty a <span class="fu">&lt;+&gt;</span> pretty i <span class="fu">PP.&lt;&gt;</span> parens (pretty b)
+    pretty (<span class="dt">Mcomment</span> s) <span class="fu">=</span> pretty <span class="st">&quot;#&quot;</span> <span class="fu">&lt;+&gt;</span> pretty s
+    pretty (<span class="dt">Msyscall</span>) <span class="fu">=</span> pretty <span class="st">&quot;syscall&quot;</span>
+
+<span class="kw">data</span> <span class="dt">MTerminatorInst</span> <span class="fu">=</span>
+    <span class="dt">Mexit</span> <span class="fu">|</span> 
+    <span class="dt">Mj</span> <span class="dt">MBBLabel</span> <span class="fu">|</span>
+    <span class="dt">Mbeqz</span> <span class="dt">MReg</span>  <span class="dt">MBBLabel</span> <span class="fu">|</span>
+    <span class="dt">Mbgtz</span> <span class="dt">MReg</span> <span class="dt">MBBLabel</span> <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>)
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">MTerminatorInst</span> <span class="kw">where</span>
+    pretty (<span class="dt">Mexit</span>) <span class="fu">=</span> pretty <span class="st">&quot;# &lt;exit&gt;&quot;</span>
+    pretty (<span class="dt">Mj</span> dest) <span class="fu">=</span> pretty <span class="st">&quot;j&quot;</span> <span class="fu">&lt;+&gt;</span> pretty dest
+    pretty (<span class="dt">Mbeqz</span> cond dest) <span class="fu">=</span> pretty <span class="st">&quot;beqz&quot;</span> <span class="fu">&lt;+&gt;</span> pretty cond <span class="fu">&lt;+&gt;</span> pretty dest
+    pretty (<span class="dt">Mbgtz</span> cond dest) <span class="fu">=</span> pretty <span class="st">&quot;bgtz&quot;</span> <span class="fu">&lt;+&gt;</span> pretty cond <span class="fu">&lt;+&gt;</span> pretty dest
+
+<span class="ot">traverseMTerminatorInstReg ::</span> <span class="dt">Applicative</span> f <span class="ot">=&gt;</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> f <span class="dt">MReg</span>) <span class="ot">-&gt;</span> 
+    <span class="dt">MTerminatorInst</span> <span class="ot">-&gt;</span> f <span class="dt">MTerminatorInst</span>
+traverseMTerminatorInstReg f <span class="dt">Mexit</span> <span class="fu">=</span> pure <span class="dt">Mexit</span>
+traverseMTerminatorInstReg f (<span class="dt">Mj</span> lbl) <span class="fu">=</span> pure (<span class="dt">Mj</span> lbl)
+traverseMTerminatorInstReg f (<span class="dt">Mbeqz</span> reg lbl) <span class="fu">=</span> <span class="dt">Mbeqz</span> <span class="fu">&lt;$&gt;</span> f reg <span class="fu">&lt;*&gt;</span> pure lbl
+traverseMTerminatorInstReg f (<span class="dt">Mbgtz</span> reg lbl) <span class="fu">=</span> <span class="dt">Mbgtz</span> <span class="fu">&lt;$&gt;</span> f reg <span class="fu">&lt;*&gt;</span> pure lbl
+
+<span class="ot">mapMTerminatorInstReg ::</span> (<span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span>) <span class="ot">-&gt;</span> <span class="dt">MTerminatorInst</span> <span class="ot">-&gt;</span> <span class="dt">MTerminatorInst</span>
+mapMTerminatorInstReg f t <span class="fu">=</span> 
+    runIdentity <span class="fu">$</span> traverseMTerminatorInstReg (<span class="dt">Identity</span> <span class="fu">.</span> f) t
+
+
+<span class="kw">type</span> <span class="dt">MBBLabel</span> <span class="fu">=</span> <span class="dt">Label</span> <span class="dt">MBB</span>
+<span class="kw">type</span> <span class="dt">MBB</span> <span class="fu">=</span> <span class="dt">BasicBlock</span> <span class="dt">MInst</span> [<span class="dt">MTerminatorInst</span>]
+<span class="kw">type</span> <span class="dt">MProgram</span> <span class="fu">=</span> <span class="dt">Program</span> <span class="dt">MInst</span> [<span class="dt">MTerminatorInst</span>]
+
+
+<span class="kw">type</span> <span class="dt">MLiveRangeBB</span> <span class="fu">=</span>  <span class="dt">BasicBlock</span> (<span class="dt">Int</span>, <span class="dt">MInst</span>) (<span class="dt">Int</span>, <span class="dt">MTerminatorInst</span>)
+  
+<span class="co">-- | Get the possible successor this terminator instruction will lead to.</span>
+<span class="ot">getTerminatorInstSuccessor ::</span> <span class="dt">MTerminatorInst</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">MBBLabel</span>
+getTerminatorInstSuccessor (<span class="dt">Mexit</span>) <span class="fu">=</span> <span class="dt">Nothing</span>
+getTerminatorInstSuccessor (<span class="dt">Mj</span> lbl) <span class="fu">=</span> <span class="dt">Just</span> lbl
+getTerminatorInstSuccessor (<span class="dt">Mbgtz</span> _ lbl) <span class="fu">=</span> <span class="dt">Just</span> lbl
+getTerminatorInstSuccessor (<span class="dt">Mbeqz</span> _ lbl) <span class="fu">=</span> <span class="dt">Just</span> lbl
+
+<span class="co">-- | Get the successors of this basic block</span>
+<span class="ot">getMBBSuccessors ::</span> <span class="dt">MBB</span> <span class="ot">-&gt;</span> [<span class="dt">MBBLabel</span>]
+getMBBSuccessors bb <span class="fu">=</span> bbRetInst bb <span class="fu">&gt;&gt;=</span> maybeToList <span class="fu">.</span> getTerminatorInstSuccessor
+
+
+<span class="kw">type</span> <span class="dt">MCFG</span> <span class="fu">=</span> <span class="dt">Graph</span> <span class="dt">MBBLabel</span>
+<span class="co">-- | Make a control flow graph</span>
+<span class="ot">mkMCFG ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> <span class="dt">MBB</span> <span class="ot">-&gt;</span> <span class="dt">MCFG</span>
+mkMCFG bbMap <span class="fu">=</span> <span class="dt">Graph</span> (M.foldMapWithKey makeEdges bbMap)  <span class="kw">where</span>
+<span class="ot">    makeEdges ::</span> <span class="dt">MBBLabel</span> <span class="ot">-&gt;</span> <span class="dt">MBB</span> <span class="ot">-&gt;</span> [(<span class="dt">MBBLabel</span>, <span class="dt">MBBLabel</span>)]
+    makeEdges bbid bb <span class="fu">=</span> map (\succ <span class="ot">-&gt;</span> (bbid, succ)) (getMBBSuccessors bb)
+
+
+<span class="co">-- | Print a MIPS program into a Doc. Use this to write it into a file.</span>
+<span class="co">-- | **Do not use pretty**, because it prints the entry BB as well.</span>
+<span class="ot">printMIPSAsm ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">Doc</span> ()
+printMIPSAsm <span class="dt">Program</span>{programBBMap<span class="fu">=</span>bbmap} <span class="fu">=</span> vsep <span class="fu">$</span> fmap printBB (M.elems bbmap)
+    <span class="kw">where</span>
+<span class="ot">        printBB ::</span> <span class="dt">MBB</span> <span class="ot">-&gt;</span> <span class="dt">Doc</span> ()
+        printBB (<span class="dt">BasicBlock</span>{bbLabel<span class="fu">=</span>label, bbInsts<span class="fu">=</span>is, bbRetInst<span class="fu">=</span>ris}) <span class="fu">=</span>
+            vcat  <span class="fu">$</span>
+                [pretty label <span class="fu">&lt;&gt;</span> pretty <span class="st">&quot;:&quot;</span>, indent <span class="dv">4</span> <span class="fu">$</span> vcat(map pretty is <span class="fu">++</span> map pretty ris)]</code></pre></div>
 </body>
 </html>

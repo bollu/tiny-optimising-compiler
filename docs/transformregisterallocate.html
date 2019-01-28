@@ -1,0 +1,492 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+  </style>
+  <link rel="stylesheet" href="pandoc.css" type="text/css" />
+</head>
+<body>
+<div class="sourceCode"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><span class="ot">{-# LANGUAGE ViewPatterns #-}</span>
+
+<span class="kw">module</span> <span class="dt">TransformRegisterAllocate</span> <span class="kw">where</span>
+<span class="kw">import qualified</span> <span class="dt">OrderedMap</span> <span class="kw">as</span> <span class="dt">M</span>
+<span class="kw">import </span><span class="dt">TransformMem2Reg</span> (mkCFG, <span class="dt">CFG</span>)
+<span class="kw">import </span><span class="dt">Control.Monad.State.Strict</span>
+<span class="kw">import </span><span class="dt">Control.Monad.Reader</span>
+<span class="kw">import </span><span class="dt">Control.Monad.Writer</span>
+
+<span class="kw">import </span><span class="dt">Data.Traversable</span>
+<span class="kw">import </span><span class="dt">Data.Foldable</span>
+<span class="kw">import </span><span class="dt">Control.Applicative</span>
+<span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
+<span class="kw">import </span><span class="dt">Data.List</span>(sortBy)
+<span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">Graph</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
+<span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
+<span class="kw">import </span><span class="dt">PrettyUtils</span>
+<span class="kw">import </span><span class="dt">Debug.Trace</span>
+<span class="kw">import </span><span class="dt">Data.Maybe</span> (isJust)
+<span class="kw">import </span><span class="dt">MIPSAsm</span>
+<span class="kw">import qualified</span> <span class="dt">Data.Set</span> <span class="kw">as</span> <span class="dt">S</span>
+
+<span class="ot">nRegisters ::</span> <span class="dt">Int</span>
+nRegisters <span class="fu">=</span> <span class="dv">1</span>
+
+<span class="ot">bumpCounter ::</span> a <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Int</span> (<span class="dt">Int</span>, a)
+bumpCounter a <span class="fu">=</span> <span class="kw">do</span>
+                  count <span class="ot">&lt;-</span> get
+                  modify (<span class="fu">+</span> <span class="dv">1</span>)
+                  return (count, a)
+
+<span class="co">-- | the type of an interference graph.</span>
+<span class="kw">type</span> <span class="dt">InterferenceGraph</span> <span class="fu">=</span> <span class="dt">Graph</span> <span class="dt">String</span>
+
+<span class="co">-- | TODO: we coalesce both real and virtual registers here, so I need to use</span>
+<span class="co">-- | String as the key. Find some way to keep type safety.</span>
+<span class="kw">data</span> <span class="dt">LiveRangeBuilderContext</span> <span class="fu">=</span> <span class="dt">LiveRangeBuilderContext</span> {
+    <span class="co">-- | First use of register</span>
+<span class="ot">    ctxBegin ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> <span class="dt">Int</span>,
+    <span class="co">-- | Final use of register</span>
+<span class="ot">    ctxEnd ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> <span class="dt">Int</span>
+}
+
+<span class="kw">data</span> <span class="dt">LiveRange</span> <span class="fu">=</span> <span class="dt">LiveRange</span> {<span class="ot"> lrName ::</span> <span class="dt">String</span>,<span class="ot"> lrBegin ::</span> <span class="dt">Int</span>,<span class="ot"> lrEnd ::</span> <span class="dt">Int</span> } <span class="kw">deriving</span>(<span class="dt">Eq</span>)
+
+
+<span class="co">-- | If L1 is contained in L2, then L1 &lt; L2.</span>
+<span class="kw">instance</span> <span class="dt">Ord</span> <span class="dt">LiveRange</span> <span class="kw">where</span>
+    l1<span class="fu">@</span>(<span class="dt">LiveRange</span> _ b1 e1) <span class="fu">&lt;=</span> l2<span class="fu">@</span>(<span class="dt">LiveRange</span> _ b2 e2) <span class="fu">=</span> 
+        l1 <span class="fu">==</span> l2 <span class="fu">||</span> (b1 <span class="fu">&gt;=</span> b2 <span class="fu">&amp;&amp;</span> e1 <span class="fu">&lt;=</span> e2)
+
+<span class="co">-- | Arrange live ranges as (left, right) where</span>
+<span class="co">-- | begintime of left &lt;= begin time of right</span>
+<span class="ot">arrangeLiveRangePair ::</span> <span class="dt">LiveRange</span> <span class="ot">-&gt;</span>  <span class="dt">LiveRange</span> <span class="ot">-&gt;</span> (<span class="dt">LiveRange</span>, <span class="dt">LiveRange</span>)
+arrangeLiveRangePair l1<span class="fu">@</span>(<span class="dt">LiveRange</span> _ b1 _) l2<span class="fu">@</span>(<span class="dt">LiveRange</span> _ b2 _) <span class="fu">=</span> 
+    <span class="kw">if</span> b1 <span class="fu">&lt;=</span> b2 <span class="kw">then</span> (l1, l2) <span class="kw">else</span> (l2, l1)
+
+<span class="co">-- | Compute the length of a live range</span>
+<span class="ot">liveRangeLength ::</span> <span class="dt">LiveRange</span> <span class="ot">-&gt;</span> <span class="dt">Int</span>
+liveRangeLength (<span class="dt">LiveRange</span> _ b e) <span class="fu">=</span> e <span class="fu">-</span> b <span class="fu">+</span> <span class="dv">1</span>
+
+<span class="co">-- | Check if the live ranges intersect.</span>
+<span class="co">-- | If the length of the hull is less than or equal to the sum of</span>
+<span class="co">-- | lengths of live ranges, then they do not intersect.</span>
+<span class="ot">liveRangeIntersects ::</span> <span class="dt">LiveRange</span> <span class="ot">-&gt;</span> <span class="dt">LiveRange</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+liveRangeIntersects l1 l2 <span class="fu">=</span> <span class="kw">let</span>
+    (<span class="dt">LiveRange</span> _ b _, <span class="dt">LiveRange</span> _ _ e) <span class="fu">=</span> arrangeLiveRangePair l1 l2
+    <span class="kw">in</span>
+        e <span class="fu">-</span> b <span class="fu">+</span> <span class="dv">1</span> <span class="fu">&lt;=</span> liveRangeLength l1 <span class="fu">+</span> liveRangeLength l2
+
+<span class="co">-- | Make an interference graph from the given live ranges.</span>
+<span class="ot">mkLiveRangeInterferenceGraph ::</span> [<span class="dt">LiveRange</span>] <span class="ot">-&gt;</span> <span class="dt">InterferenceGraph</span>
+mkLiveRangeInterferenceGraph lrs <span class="fu">=</span> <span class="dt">Graph</span> <span class="fu">$</span> <span class="kw">do</span>
+    l1 <span class="ot">&lt;-</span> lrs
+    l2 <span class="ot">&lt;-</span> lrs
+    guard <span class="fu">$</span> l1 <span class="fu">/=</span> l2
+    guard <span class="fu">$</span> liveRangeIntersects l1 l2
+    [(lrName l1, lrName l2), (lrName l2, lrName l1)]
+
+<span class="co">-- | Arrange by the begin time</span>
+<span class="ot">arrangeByStart ::</span> [<span class="dt">LiveRange</span>] <span class="ot">-&gt;</span> [<span class="dt">LiveRange</span>]
+arrangeByStart <span class="fu">=</span> sortBy (\(lrBegin <span class="ot">-&gt;</span> b1) (lrBegin <span class="ot">-&gt;</span> b2) <span class="ot">-&gt;</span> b1 <span class="ot">`compare`</span> b2)
+
+<span class="co">-- | Arrange by the end time</span>
+<span class="ot">arrangeByEnd ::</span> [<span class="dt">LiveRange</span>] <span class="ot">-&gt;</span> [<span class="dt">LiveRange</span>]
+arrangeByEnd <span class="fu">=</span> sortBy (\(lrEnd <span class="ot">-&gt;</span> e1) (lrEnd <span class="ot">-&gt;</span> e2) <span class="ot">-&gt;</span> e1 <span class="ot">`compare`</span> e2)
+
+
+    
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">LiveRange</span> <span class="kw">where</span>
+    pretty (<span class="dt">LiveRange</span> name b e) <span class="fu">=</span> pretty name <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;:&quot;</span> <span class="fu">&lt;+&gt;</span> parens (pretty b <span class="fu">&lt;+&gt;</span> pretty <span class="st">&quot;to&quot;</span> <span class="fu">&lt;+&gt;</span> pretty e)
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">LiveRangeBuilderContext</span> <span class="kw">where</span>
+    pretty ctx <span class="fu">=</span> 
+        <span class="kw">if</span> null ls
+        <span class="kw">then</span> pretty <span class="st">&quot;EMPTY&quot;</span>
+        <span class="kw">else</span> vcat <span class="fu">$</span> map pretty  ls
+        <span class="kw">where</span>
+        ls <span class="fu">=</span> mkLiveRangesFromContext ctx
+
+<span class="ot">defaultLiveRangeBuilderContext ::</span> <span class="dt">LiveRangeBuilderContext</span>
+defaultLiveRangeBuilderContext <span class="fu">=</span> <span class="dt">LiveRangeBuilderContext</span> mempty mempty
+
+<span class="co">-- | Record the use of a register</span>
+<span class="co">-- | If we have already have this in &quot;begin&quot;, then keep it the same,</span>
+<span class="co">-- | and edit the &quot;end&quot;. Otherwise, add the register to both &quot;begin&quot; and &quot;end&quot;</span>
+<span class="ot">recordRegisterUse ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">LiveRangeBuilderContext</span> <span class="dt">MReg</span>
+recordRegisterUse  pos reg<span class="fu">@</span>(<span class="dt">MRegVirtual</span> (<span class="dt">Label</span> name)) <span class="fu">=</span> <span class="kw">do</span>
+    hasbegin <span class="ot">&lt;-</span> gets (\(<span class="dt">LiveRangeBuilderContext</span>{ctxBegin<span class="fu">=</span>begin}) <span class="ot">-&gt;</span> 
+                      isJust (M.lookup name begin))
+    <span class="kw">if</span> not hasbegin <span class="kw">then</span>
+        modify (\(ctx<span class="fu">@</span><span class="dt">LiveRangeBuilderContext</span>{ctxBegin<span class="fu">=</span>begin}) <span class="ot">-&gt;</span>
+                ctx {
+                    ctxBegin<span class="fu">=</span>M.insert name pos begin
+                })
+    <span class="kw">else</span>
+        return ()
+
+    modify (\ctx<span class="fu">@</span><span class="dt">LiveRangeBuilderContext</span>{ctxEnd<span class="fu">=</span>end} <span class="ot">-&gt;</span>
+                ctx {
+                    ctxEnd<span class="fu">=</span>M.insert name pos end
+                })
+    return reg
+
+<span class="co">-- TODO: we need to implement this for real registers as well (interference)</span>
+recordRegisterUse _ reg <span class="fu">=</span> return reg 
+
+<span class="co">-- | Construct a LiveRangeBuilderContext from a timestamped program.</span>
+<span class="co">-- | This essentially corresponds to finding time of creation and time of</span>
+<span class="co">-- | last use for every register.</span>
+<span class="co">-- | TODO: rewrite with foldr, only sensible way to write this.</span>
+<span class="ot">mkLiveRangeBuilderContext ::</span> <span class="dt">MProgramTimestamped</span> <span class="ot">-&gt;</span> <span class="dt">LiveRangeBuilderContext</span>
+mkLiveRangeBuilderContext progTimestamped <span class="fu">=</span> 
+    execState s defaultLiveRangeBuilderContext <span class="kw">where</span>
+<span class="ot">        s ::</span> <span class="dt">State</span> <span class="dt">LiveRangeBuilderContext</span> (<span class="dt">Program</span> <span class="dt">MInst</span> [<span class="dt">MTerminatorInst</span>])
+        s <span class="fu">=</span> traverseProgramBBs (traverseBB
+                                (\(i, reg) <span class="ot">-&gt;</span> traverseMInstReg (recordRegisterUse i) reg)
+                                (\ris <span class="ot">-&gt;</span> for ris (\(i, ri) <span class="ot">-&gt;</span> traverseMTerminatorInstReg (recordRegisterUse i) ri))) progTimestamped
+
+
+<span class="ot">mkLiveRangesFromContext ::</span> <span class="dt">LiveRangeBuilderContext</span> <span class="ot">-&gt;</span> [<span class="dt">LiveRange</span>]
+mkLiveRangesFromContext (<span class="dt">LiveRangeBuilderContext</span> begin end) <span class="fu">=</span> lrs
+    <span class="kw">where</span>
+<span class="ot">    ks ::</span> [<span class="dt">String</span>]
+    ks <span class="fu">=</span> M.keys begin
+
+<span class="ot">    lrs ::</span> [<span class="dt">LiveRange</span>]
+    lrs <span class="fu">=</span> map (\k <span class="ot">-&gt;</span> <span class="dt">LiveRange</span> k (begin <span class="fu">M.!</span> k) (end <span class="fu">M.!</span> k)) ks
+
+<span class="co">-- | Assign physical registers to all virtual registers</span>
+<span class="co">-- | Once this function is called, all variables are assigned physical registers</span>
+<span class="co">-- | TODO: implement spilling.</span>
+<span class="ot">assignPhysicalRegisters ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> (<span class="dt">Maybe</span> <span class="dt">Int</span>) <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+assignPhysicalRegisters regmap p <span class="fu">=</span> 
+    mapProgramBBs 
+        (mapBB (mapMInstReg assignRealReg)
+                (map (mapMTerminatorInstReg assignRealReg))) p <span class="kw">where</span>
+<span class="ot">    assignRealReg ::</span> <span class="dt">MReg</span> <span class="ot">-&gt;</span> <span class="dt">MReg</span>
+    assignRealReg vreg<span class="fu">@</span>(<span class="dt">MRegVirtual</span> (<span class="dt">Label</span> name)) <span class="fu">=</span> 
+        <span class="kw">case</span> name <span class="ot">`M.lookup`</span> regmap <span class="kw">of</span>
+            <span class="dt">Just</span> (<span class="dt">Just</span> rnum) <span class="ot">-&gt;</span> mkTemporaryReg (rnum <span class="fu">-</span> <span class="dv">1</span>) <span class="co">-- | -1 because colors are [1..n]</span>
+            <span class="co">-- Keep registers to be spilled</span>
+            <span class="dt">Just</span> (<span class="dt">Nothing</span>) <span class="ot">-&gt;</span> vreg <span class="co">-- error . docToString $ pretty &quot;register needs to be spilled, unimplemented:&quot; &lt;+&gt; pretty name</span>
+            <span class="dt">Nothing</span> <span class="ot">-&gt;</span> error <span class="fu">.</span> docToString <span class="fu">$</span> pretty <span class="st">&quot;register not assigned a color at all: &quot;</span> <span class="fu">&lt;+&gt;</span> pretty name
+    assignRealReg r <span class="fu">=</span> r
+
+<span class="co">-- *** REGISTER SPILLING</span>
+
+
+<span class="co">-- | List of worker registers that are in use. Note that this is dynamic,</span>
+<span class="co">-- | because trying to &quot;legalise&quot; an instruction might grab multiple</span>
+<span class="co">-- | worker registers</span>
+<span class="kw">data</span> <span class="dt">WorkerRegs</span> <span class="fu">=</span> <span class="dt">WorkerRegs</span> {<span class="ot"> getWorkerRegs ::</span> <span class="dt">S.Set</span> <span class="dt">MReg</span> }
+
+
+<span class="co">-- | Context for spilling</span>
+<span class="kw">data</span> <span class="dt">SpillContext</span> <span class="fu">=</span> <span class="dt">SpillContext</span> {
+<span class="ot">    spillCtxUncoloredRegs ::</span> <span class="dt">S.Set</span> (<span class="dt">Label</span> <span class="dt">MReg</span>),
+<span class="ot">    spillCtxStackOffsets ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> <span class="dt">StackOffset</span>
+}
+
+<span class="ot">mkSpillContext ::</span> [<span class="dt">Label</span> <span class="dt">MReg</span>] <span class="co">-- ^ Registers to spill</span>
+    <span class="ot">-&gt;</span> <span class="dt">WorkerRegs</span> <span class="co">-- ^ Worker registers</span>
+    <span class="ot">-&gt;</span> <span class="dt">SpillContext</span>
+mkSpillContext tospill (<span class="dt">WorkerRegs</span> workers) <span class="fu">=</span>
+    <span class="dt">SpillContext</span> (S.fromList tospill) offsets <span class="kw">where</span>
+<span class="ot">        offsets ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> <span class="dt">StackOffset</span>
+        offsets <span class="fu">=</span> M.fromList (zip allregs (map <span class="dt">StackOffset</span> [<span class="dv">0</span>,<span class="fu">-</span><span class="dv">4</span><span class="fu">..</span>]))
+
+<span class="ot">        allregs ::</span> [<span class="dt">String</span>]
+        allregs <span class="fu">=</span> map unLabel tospill <span class="fu">++</span> map regToString (S.toList workers)
+
+
+<span class="kw">type</span> <span class="dt">SpillM</span> a <span class="fu">=</span> <span class="dt">StateT</span> <span class="dt">WorkerRegs</span> (<span class="dt">ReaderT</span> <span class="dt">SpillContext</span> (<span class="dt">Writer</span> <span class="dt">SpillingInsts</span>)) a
+
+<span class="co">-- | Run a SpillM, given a seed spilling context and a collection of</span>
+<span class="co">-- | available worker registers</span>
+<span class="ot">runSpillM ::</span> <span class="dt">WorkerRegs</span> <span class="ot">-&gt;</span> <span class="dt">SpillContext</span> <span class="ot">-&gt;</span> <span class="dt">SpillM</span> a <span class="ot">-&gt;</span> (a, <span class="dt">SpillingInsts</span>)
+runSpillM workers ctx  spillm <span class="fu">=</span> runWriter <span class="fu">$</span> runReaderT (evalStateT spillm workers) ctx
+
+
+<span class="co">-- | A structure to represent instructions used to spill registers.</span>
+<span class="co">-- | Has a convenient monoidal structure which we exploit.</span>
+<span class="kw">data</span> <span class="dt">SpillingInsts</span> <span class="fu">=</span> <span class="dt">SpillingInsts</span> {
+<span class="ot">    spillInstsPre ::</span> [<span class="dt">MInst</span>],
+<span class="ot">    spillInstsPost ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> [<span class="dt">MInst</span>]
+}
+
+<span class="kw">instance</span> <span class="dt">Monoid</span> <span class="dt">SpillingInsts</span> <span class="kw">where</span>
+    mempty <span class="fu">=</span> <span class="dt">SpillingInsts</span> mempty mempty
+    
+    (<span class="dt">SpillingInsts</span> pre1 post1) <span class="ot">`mappend`</span> (<span class="dt">SpillingInsts</span> pre2 post2) <span class="fu">=</span> 
+        <span class="dt">SpillingInsts</span> (pre2 <span class="fu">++</span> pre1) post&#39;
+
+        <span class="kw">where</span>
+<span class="ot">            postFuser ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> [<span class="dt">MInst</span>]
+                <span class="ot">-&gt;</span> (<span class="dt">MBBLabel</span>, [<span class="dt">MInst</span>])
+                <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> [<span class="dt">MInst</span>]
+            postFuser m (bbid, insts) <span class="fu">=</span> M.insertWith (<span class="fu">++</span>) bbid insts m
+
+<span class="ot">            post&#39; ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> [<span class="dt">MInst</span>]
+            post&#39; <span class="fu">=</span> foldl postFuser post1 (M.toList post2)
+
+<span class="co">-- | Helper newtype to clearly denote stack offsets</span>
+<span class="kw">newtype</span> <span class="dt">StackOffset</span> <span class="fu">=</span> <span class="dt">StackOffset</span> {<span class="ot"> unStackOffset ::</span>  <span class="dt">Int</span> }
+
+<span class="kw">instance</span> <span class="dt">Pretty</span> <span class="dt">StackOffset</span> <span class="kw">where</span>
+    pretty (<span class="dt">StackOffset</span> loc) <span class="fu">=</span> pretty <span class="st">&quot;stackoffset&quot;</span> <span class="fu">PP.&lt;&gt;</span> braces (pretty loc)
+
+
+<span class="co">-- | The worker registers that are available. We need to make sure that</span>
+<span class="co">-- | there are at least 2 worker registers.</span>
+<span class="ot">gSpillWorkRegs ::</span> <span class="dt">WorkerRegs</span> 
+gSpillWorkRegs <span class="fu">=</span> <span class="dt">WorkerRegs</span> <span class="fu">.</span> S.fromList <span class="fu">$</span> map mkTemporaryReg [nRegisters<span class="fu">..</span><span class="dv">7</span>]
+
+<span class="co">-- | Make a SpillingInsts structure that shows how to setup a worker register</span>
+<span class="co">-- | And how to reload the old state.</span>
+<span class="ot">mkSpillingInsts ::</span> <span class="dt">Maybe</span> <span class="dt">MBBLabel</span> <span class="co">-- ^ Label of the basic block to which the &quot;post&quot; instructions should go to. Can be empty if not needed</span>
+    <span class="ot">-&gt;</span> (<span class="dt">MReg</span>, <span class="dt">StackOffset</span>) <span class="co">-- ^ Real Register to be used for operations with stack offset</span>
+    <span class="ot">-&gt;</span> (<span class="dt">MReg</span>, <span class="dt">StackOffset</span>) <span class="co">-- ^ Register to be spilled with stack offset</span>
+    <span class="ot">-&gt;</span> <span class="dt">SpillingInsts</span>
+mkSpillingInsts mCurbbid (real, (<span class="dt">StackOffset</span> realso)) (virtual, (<span class="dt">StackOffset</span> virtualso))
+    <span class="fu">=</span> <span class="dt">SpillingInsts</span> pre post <span class="kw">where</span>
+<span class="ot">        pre ::</span> [<span class="dt">MInst</span>]
+        pre <span class="fu">=</span> [<span class="dt">Msw</span> real realso regsp,
+               <span class="dt">Mlw</span> real virtualso regsp]
+
+<span class="ot">        post ::</span> <span class="dt">M.OrderedMap</span> <span class="dt">MBBLabel</span> [<span class="dt">MInst</span>]
+        post <span class="fu">=</span> <span class="kw">case</span> mCurbbid <span class="kw">of</span>
+                <span class="dt">Just</span> curbbid <span class="ot">-&gt;</span> M.fromList <span class="fu">$</span> [(curbbid, postInsts)]
+                <span class="dt">Nothing</span> <span class="ot">-&gt;</span> mempty
+
+<span class="ot">        postInsts ::</span> [<span class="dt">MInst</span>]
+        postInsts <span class="fu">=</span> [<span class="dt">Msw</span> real virtualso regsp,
+                     <span class="dt">Mlw</span> real realso regsp]
+
+
+<span class="co">-- | Get a worker register for a task. Note that this does not</span>
+<span class="co">-- | release the worker register.</span>
+<span class="co">-- | If no worker registers are available, then error out.</span>
+<span class="ot">getWorkerReg ::</span> <span class="dt">SpillM</span> <span class="dt">MReg</span>
+getWorkerReg <span class="fu">=</span> <span class="kw">do</span>
+    workers <span class="ot">&lt;-</span> gets getWorkerRegs
+    <span class="kw">if</span> S.null workers
+    <span class="kw">then</span> error <span class="st">&quot;there are no worker registers available.&quot;</span>
+    <span class="kw">else</span> <span class="kw">do</span>
+        <span class="kw">let</span> cur <span class="fu">=</span> S.elemAt <span class="dv">0</span> workers
+        put <span class="fu">$</span> <span class="dt">WorkerRegs</span> (S.deleteAt <span class="dv">0</span> workers)
+        return cur
+
+<span class="co">-- | Get the register offset out of spillM</span>
+<span class="ot">getRegOffset ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">SpillM</span> <span class="dt">StackOffset</span> 
+getRegOffset name <span class="fu">=</span> asks (\ctx <span class="ot">-&gt;</span> (spillCtxStackOffsets ctx) <span class="fu">M.!</span> name)
+
+<span class="co">-- | If a register is uncolored, provide the instructions needed to perform</span>
+<span class="co">-- | A correct Spill/Unspill</span>
+<span class="ot">spillReg ::</span> <span class="dt">Maybe</span> <span class="dt">MBBLabel</span> <span class="co">-- ^ BB to which post instructions should go to.</span>
+            <span class="ot">-&gt;</span> <span class="dt">MReg</span> <span class="co">-- ^ Current register</span>
+            <span class="ot">-&gt;</span> <span class="dt">SpillM</span> <span class="dt">MReg</span>
+spillReg mCurbbid cur<span class="fu">@</span>(<span class="dt">MRegVirtual</span> lbl) <span class="fu">=</span> <span class="kw">do</span>
+    isUncolored <span class="ot">&lt;-</span> asks (\ctx <span class="ot">-&gt;</span> lbl <span class="ot">`S.member`</span> (spillCtxUncoloredRegs ctx))
+    <span class="kw">if</span> not isUncolored
+    <span class="kw">then</span> return cur
+    <span class="kw">else</span> <span class="kw">do</span>
+        <span class="co">-- | allocate a real register and hold on to it.</span>
+        real <span class="ot">&lt;-</span> getWorkerReg
+        realoffset <span class="ot">&lt;-</span> getRegOffset <span class="fu">$</span> regToString real
+        curoffset <span class="ot">&lt;-</span> getRegOffset <span class="fu">$</span> regToString cur
+        tell <span class="fu">$</span> mkSpillingInsts mCurbbid (real, realoffset) (cur, curoffset)
+        return real
+spillReg _ cur <span class="fu">=</span> return cur
+
+
+<span class="co">-- | Spill the registers in a given instruction, to create a sequence of</span>
+<span class="co">-- | instructions that spill and restore if needed</span>
+<span class="co">-- | TODO: consider if WorkerRegs can be folded into SpillContext somehow.</span>
+<span class="ot">spillInst ::</span> <span class="dt">MBBLabel</span> <span class="ot">-&gt;</span> <span class="dt">WorkerRegs</span> <span class="ot">-&gt;</span> <span class="dt">SpillContext</span> <span class="ot">-&gt;</span> <span class="dt">MInst</span> <span class="ot">-&gt;</span> [<span class="dt">MInst</span>]
+spillInst curbbid workers ctx inst <span class="fu">=</span> preInsts <span class="fu">++</span> [inst&#39;] <span class="fu">++</span> postInsts <span class="kw">where</span>
+<span class="ot">    spiller ::</span> <span class="dt">SpillM</span> <span class="dt">MInst</span>
+    spiller <span class="fu">=</span> traverseMInstReg (spillReg (<span class="dt">Just</span> curbbid)) inst
+
+    (inst&#39;, <span class="dt">SpillingInsts</span> preInsts postInstsMap) <span class="fu">=</span> runSpillM workers ctx spiller
+
+<span class="ot">    postInsts ::</span> [<span class="dt">MInst</span>]
+    postInsts <span class="fu">=</span> <span class="kw">case</span> M.lookup curbbid postInstsMap <span class="kw">of</span>
+                    <span class="dt">Just</span> post <span class="ot">-&gt;</span> post
+                    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> []
+
+<span class="co">-- | A spiller (frozen SpillM) for a terminator inst. This creates the</span>
+<span class="co">-- | spill code to load variables from memory, and generates post spill code</span>
+<span class="co">-- | in the succeeding basic block if need be.</span>
+<span class="co">-- | Note that this is not _fully_ correct, because it is possible that some</span>
+<span class="co">-- | sequence of original return instructions:</span>
+<span class="co">-- |</span>
+<span class="co">-- | term1</span>
+<span class="co">-- | term2</span>
+<span class="co">-- | </span>
+<span class="co">-- | May need to be lowered into:</span>
+<span class="co">-- | &lt;pre term1&gt;</span>
+<span class="co">-- | term1</span>
+<span class="co">-- | &lt;post term1&gt;</span>
+<span class="co">-- | &lt;pre term2&gt;</span>
+<span class="co">-- | term2</span>
+<span class="co">-- | &lt;post term2&gt;</span>
+<span class="co">-- | However, since in our case, term2 is always some sort of unconditional jump,</span>
+<span class="co">-- | &lt;pre term2&gt; is always empty. Hence, we can thank our lucky stars.</span>
+<span class="ot">spillerTerminatorInst_ ::</span> <span class="dt">MTerminatorInst</span> <span class="ot">-&gt;</span> <span class="dt">SpillM</span> <span class="dt">MTerminatorInst</span>
+spillerTerminatorInst_ terminator <span class="fu">=</span> <span class="kw">do</span>
+    <span class="co">-- | get the worker registers</span>
+    workers <span class="ot">&lt;-</span> get
+    <span class="kw">let</span> mSuccessor <span class="fu">=</span> getTerminatorInstSuccessor terminator
+    terminator&#39; <span class="ot">&lt;-</span> (traverseMTerminatorInstReg (spillReg mSuccessor) terminator)
+    <span class="co">-- | Restore worker registers.</span>
+    put workers
+    return terminator&#39;
+
+<span class="ot">spillTerminatorInst ::</span> <span class="dt">MBBLabel</span> <span class="co">-- ^ Current basic block ID</span>
+    <span class="ot">-&gt;</span> <span class="dt">WorkerRegs</span> <span class="co">-- ^ worker registers that are available for spilling.</span>
+    <span class="ot">-&gt;</span> <span class="dt">SpillContext</span> <span class="co">-- ^ ambient spilling context that has info about colors of registers</span>
+    <span class="ot">-&gt;</span> <span class="dt">MTerminatorInst</span> <span class="co">-- ^ Terminator instruction in consideration</span>
+    <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="co">-- ^ Current program state</span>
+    <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="co">-- ^ next program state</span>
+spillTerminatorInst curbbid workers ctx term p <span class="fu">=</span> fullTransform p
+
+    <span class="kw">where</span>
+        <span class="co">-- | Get the list of </span>
+        (term&#39;, <span class="dt">SpillingInsts</span> preInsts postInstsMap) <span class="fu">=</span> runSpillM workers ctx (spillerTerminatorInst_ term)
+
+        <span class="co">-- | insert instructions into current bb</span>
+<span class="ot">        insertCur ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+        insertCur <span class="fu">=</span> mapProgramAt curbbid (insertInstsEndBB preInsts)
+
+        <span class="co">-- | replace the terminator inst. TODO: this is shaky, we should ideally number the BB so we know exactly </span>
+        <span class="co">-- | which terminator we are editing. For now, we rely on the fact that in a BB, no two terminators will look the same.</span>
+<span class="ot">        replaceTerminator ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+        replaceTerminator <span class="fu">=</span> mapProgramAt curbbid (mapBB id (map (\ri <span class="ot">-&gt;</span> <span class="kw">if</span> ri <span class="fu">==</span> term <span class="kw">then</span> term&#39; <span class="kw">else</span> ri)))
+
+        <span class="co">-- | insert instructions into a successor basic block</span>
+<span class="ot">        insertPost ::</span> <span class="dt">MBBLabel</span> <span class="ot">-&gt;</span> [<span class="dt">MInst</span>] <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+        insertPost nextbbid post <span class="fu">=</span> mapProgramAt curbbid (insertInstsBeginBB post)
+
+        <span class="co">-- | list of functions that will insert instructions into successor basic block</span>
+<span class="ot">        postInserters ::</span> [<span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>]
+        postInserters <span class="fu">=</span> map (\(bbid, insts) <span class="ot">-&gt;</span> insertPost bbid insts) (M.toList postInstsMap)
+
+        <span class="co">-- | final function that will perform full spilling</span>
+        <span class="co">-- | TODO: rewrite with Endo?</span>
+<span class="ot">        fullTransform ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+        fullTransform <span class="fu">=</span> foldl (<span class="fu">.</span>) id (replaceTerminator<span class="fu">:</span>insertCur<span class="fu">:</span>postInserters)
+
+
+
+
+<span class="ot">spillTerminatorInstSt ::</span> <span class="dt">MBBLabel</span> <span class="ot">-&gt;</span> <span class="dt">WorkerRegs</span> <span class="ot">-&gt;</span> <span class="dt">SpillContext</span> <span class="ot">-&gt;</span> <span class="dt">MTerminatorInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">MProgram</span> ()
+spillTerminatorInstSt curbbid workers ctx term <span class="fu">=</span>
+    modify (spillTerminatorInst curbbid workers ctx term)
+
+<span class="co">-- | The entry point to spilling code</span>
+<span class="ot">spillEntryPoint ::</span> [<span class="dt">Label</span> <span class="dt">MReg</span>] <span class="co">-- ^ Registers to spill</span>
+    <span class="ot">-&gt;</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+spillEntryPoint tospill p <span class="fu">=</span> spillTerminators_ <span class="fu">.</span> spillInsts_ <span class="fu">$</span> p <span class="kw">where</span>    
+<span class="ot">    spillTerminatorsSt ::</span> <span class="dt">State</span> <span class="dt">MProgram</span> ()
+    spillTerminatorsSt <span class="fu">=</span> mapMProgramBBs_ (\bb <span class="ot">-&gt;</span> mapMBB_ (const (return ()))
+                                            (\retinsts <span class="ot">-&gt;</span> forM_ retinsts (spillTerminatorInstSt (bbLabel bb) gSpillWorkRegs spillctx)) bb) p
+<span class="ot">    spillTerminators_ ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+    spillTerminators_ <span class="fu">=</span> execState spillTerminatorsSt
+
+<span class="ot">    spillInsts_ ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+    spillInsts_ <span class="fu">=</span> mapProgramBBs (\bb <span class="ot">-&gt;</span> mapBBInstLocus (spillInst (bbLabel bb) gSpillWorkRegs spillctx) bb)
+
+<span class="ot">    spillctx ::</span> <span class="dt">SpillContext</span>
+    spillctx <span class="fu">=</span> mkSpillContext tospill gSpillWorkRegs
+
+<span class="ot">    cfg ::</span> <span class="dt">MCFG</span>
+    cfg <span class="fu">=</span> mkMCFG (programBBMap p)
+
+<span class="co">-- | Construct an interference graph of the given program.</span>
+<span class="ot">mkInterferenceGraph ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">InterferenceGraph</span>
+mkInterferenceGraph <span class="fu">=</span> mkLiveRangeInterferenceGraph <span class="fu">.</span> mkLiveRangesFromContext <span class="fu">.</span> mkLiveRangeBuilderContext <span class="fu">.</span> timestampProgram
+
+
+<span class="co">-- | Color the registers of a program.</span>
+<span class="co">-- | Returns a map from register name to the color.</span>
+<span class="co">-- | If a name does not exist on the map, then it must be spilled.</span>
+<span class="ot">colorRegisters ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">M.OrderedMap</span> <span class="dt">String</span> (<span class="dt">Maybe</span> <span class="dt">GraphColor</span>)
+colorRegisters <span class="fu">=</span> greedyColorGraph nRegisters <span class="fu">.</span> mkInterferenceGraph
+
+<span class="co">-- | Program with each instruction timestamped</span>
+<span class="kw">type</span> <span class="dt">MProgramTimestamped</span> <span class="fu">=</span> <span class="dt">Program</span> (<span class="dt">Int</span>, <span class="dt">MInst</span>) [(<span class="dt">Int</span>, <span class="dt">MTerminatorInst</span>)]
+
+<span class="ot">timestampProgram ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgramTimestamped</span>
+timestampProgram p <span class="fu">=</span> evalState (traverseProgramBBs (traverseBB bumpCounter (\ris <span class="ot">-&gt;</span> for ris bumpCounter)) p) <span class="dv">0</span>
+
+
+<span class="ot">transformRegisterAllocate ::</span> <span class="dt">MProgram</span> <span class="ot">-&gt;</span> <span class="dt">MProgram</span>
+transformRegisterAllocate mprogram <span class="fu">=</span> trace (docToString <span class="fu">$</span> 
+    vcat [pretty <span class="st">&quot;timestamped program:&quot;</span>,
+    indent <span class="dv">4</span> <span class="fu">$</span> pretty (timestampProgram mprogram),
+    pretty <span class="st">&quot;live range info: &quot;</span>,
+    indent <span class="dv">4</span><span class="fu">.</span> pretty <span class="fu">.</span> mkLiveRangeBuilderContext <span class="fu">.</span> timestampProgram <span class="fu">$</span> mprogram,
+    pretty <span class="st">&quot;interference graph:&quot;</span>,
+    indent <span class="dv">4</span><span class="fu">.</span> pretty <span class="fu">.</span> mkInterferenceGraph <span class="fu">$</span> mprogram,
+    pretty <span class="st">&quot;coloring:&quot;</span>,
+    indent <span class="dv">4</span> <span class="fu">.</span> pretty <span class="fu">.</span> colorRegisters <span class="fu">$</span> mprogram,
+    pretty <span class="st">&quot;physical regs assigned program: &quot;</span>,
+    indent <span class="dv">4</span> <span class="fu">.</span> pretty <span class="fu">$</span> physicalAssignedProgram,
+    pretty <span class="st">&quot;Spilled program: &quot;</span>,
+    indent <span class="dv">4</span> <span class="fu">.</span> pretty <span class="fu">$</span> spilledProgram]) spilledProgram <span class="kw">where</span>
+        coloring <span class="fu">=</span> colorRegisters mprogram
+
+<span class="ot">        physicalAssignedProgram ::</span> <span class="dt">MProgram</span>
+        physicalAssignedProgram <span class="fu">=</span> (assignPhysicalRegisters coloring mprogram)
+
+<span class="ot">        spilledProgram ::</span> <span class="dt">MProgram</span>
+        spilledProgram <span class="fu">=</span> spillEntryPoint registersToSpill physicalAssignedProgram
+
+<span class="ot">        registersToSpill ::</span> [<span class="dt">Label</span> <span class="dt">MReg</span>]
+        registersToSpill <span class="fu">=</span> M.foldMapWithKey (\k mColor <span class="ot">-&gt;</span> <span class="kw">case</span> mColor <span class="kw">of</span> 
+                                                            <span class="dt">Just</span> _ <span class="ot">-&gt;</span> []
+                                                            <span class="dt">Nothing</span> <span class="ot">-&gt;</span> [<span class="dt">Label</span> k]) coloring</code></pre></div>
+</body>
+</html>

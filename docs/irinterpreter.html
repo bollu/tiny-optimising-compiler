@@ -55,13 +55,14 @@ code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Inf
 <span class="kw">import </span><span class="dt">Control.Applicative</span>
 <span class="kw">import qualified</span> <span class="dt">Data.List.NonEmpty</span> <span class="kw">as</span> <span class="dt">NE</span>
 <span class="kw">import </span><span class="dt">IR</span>
+<span class="kw">import </span><span class="dt">BaseIR</span>
 <span class="kw">import </span><span class="dt">Data.Text.Prettyprint.Doc</span> <span class="kw">as</span> <span class="dt">PP</span>
 <span class="kw">import </span><span class="dt">PrettyUtils</span>
 
 
 <span class="kw">data</span> <span class="dt">Evaluator</span> <span class="fu">=</span> <span class="dt">Evaluator</span> {
 <span class="ot">    program ::</span> <span class="dt">IRProgram</span>,
-<span class="ot">    prevbbid ::</span> <span class="dt">Maybe</span> <span class="dt">BBId</span>,
+<span class="ot">    prevbbid ::</span> <span class="dt">Maybe</span> <span class="dt">IRBBId</span>,
 <span class="ot">    valueMap ::</span> <span class="dt">M.OrderedMap</span> (<span class="dt">Label</span> <span class="dt">Inst</span>) <span class="dt">Int</span>,
 <span class="ot">    returnval ::</span> <span class="dt">Maybe</span> <span class="dt">Int</span>
 }
@@ -102,7 +103,7 @@ setValue name val <span class="fu">=</span>
 getValue (<span class="dt">ValueConstInt</span> i) <span class="fu">=</span> return i
 getValue (<span class="dt">ValueInstRef</span> name) <span class="fu">=</span> loadName name
 
-<span class="ot">getPreviousBBId ::</span> <span class="dt">State</span> <span class="dt">Evaluator</span> <span class="dt">BBId</span>
+<span class="ot">getPreviousBBId ::</span> <span class="dt">State</span> <span class="dt">Evaluator</span> <span class="dt">IRBBId</span>
 getPreviousBBId <span class="fu">=</span> <span class="kw">do</span>
     prevbb <span class="ot">&lt;-</span> gets prevbbid
     <span class="kw">case</span> prevbb <span class="kw">of</span>
@@ -123,14 +124,14 @@ evaluateInst namedinst<span class="fu">@</span>(<span class="dt">Named</span> lh
                 prevbbid <span class="ot">&lt;-</span> getPreviousBBId
                 getValue (snd (getCurrentBBIdValue prevbbid))  <span class="fu">&gt;&gt;=</span> setValue lhsname
             <span class="kw">where</span>
-<span class="ot">                pred ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Bool</span>
+<span class="ot">                pred ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> (<span class="dt">IRBBId</span>, <span class="dt">Value</span>) <span class="ot">-&gt;</span> <span class="dt">Bool</span>
                 pred prevbbid (bbid, _) <span class="fu">=</span> bbid <span class="fu">==</span> prevbbid
 
-<span class="ot">                getCurrentBBIdValue ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> (<span class="dt">BBId</span>, <span class="dt">Value</span>)
+<span class="ot">                getCurrentBBIdValue ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> (<span class="dt">IRBBId</span>, <span class="dt">Value</span>)
                 getCurrentBBIdValue prevbbid <span class="fu">=</span> head <span class="fu">.</span> NE.filter (pred prevbbid) <span class="fu">$</span> bbidValuePairs
 
 
-<span class="ot">followRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> (<span class="dt">Maybe</span> <span class="dt">BBId</span>)
+<span class="ot">followRetInst ::</span> <span class="dt">RetInst</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> (<span class="dt">Maybe</span> <span class="dt">IRBBId</span>)
 followRetInst (<span class="dt">RetInstTerminal</span>) <span class="fu">=</span> return <span class="dt">Nothing</span>
 followRetInst (<span class="dt">RetInstBranch</span> bbid) <span class="fu">=</span> return (<span class="dt">Just</span> bbid)
 followRetInst (<span class="dt">RetInstConditionalBranch</span> val t e) <span class="fu">=</span> <span class="kw">do</span>
@@ -143,9 +144,9 @@ followRetInst (<span class="dt">RetInstRet</span> retval) <span class="fu">=</sp
     modify (\evaluator <span class="ot">-&gt;</span> evaluator { returnval<span class="fu">=</span><span class="dt">Just</span> retvalInt})
     return <span class="dt">Nothing</span>
 
-<span class="ot">evaluateBB ::</span> <span class="dt">BBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> ()
+<span class="ot">evaluateBB ::</span> <span class="dt">IRBBId</span> <span class="ot">-&gt;</span> <span class="dt">State</span> <span class="dt">Evaluator</span> ()
 evaluateBB bbid <span class="fu">=</span> <span class="kw">do</span>
-    bb <span class="ot">&lt;-</span> gets <span class="fu">$</span> (<span class="fu">M.!</span> bbid) <span class="fu">.</span> irProgramBBMap <span class="fu">.</span> program
+    bb <span class="ot">&lt;-</span> gets <span class="fu">$</span> (<span class="fu">M.!</span> bbid) <span class="fu">.</span> programBBMap <span class="fu">.</span> program
     for (bbInsts bb) evaluateInst
     nextid <span class="ot">&lt;-</span> followRetInst (bbRetInst bb)
     modify (\evaluator <span class="ot">-&gt;</span> evaluator {prevbbid<span class="fu">=</span><span class="dt">Just</span> bbid})
@@ -154,7 +155,9 @@ evaluateBB bbid <span class="fu">=</span> <span class="kw">do</span>
         <span class="dt">Nothing</span> <span class="ot">-&gt;</span> return ()
         <span class="dt">Just</span> nextid <span class="ot">-&gt;</span> evaluateBB nextid
 
+<span class="co">-- | TODO: convert to Either Error (Maybe Int)</span>
+<span class="co">-- | The internal monad transformer would need to become EitherT</span>
 <span class="ot">runProgram ::</span> <span class="dt">IRProgram</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Int</span>
-runProgram program <span class="fu">=</span> returnval <span class="fu">$</span> execState (evaluateBB (irProgramEntryBBId program)) (initEvaluator program)</code></pre></div>
+runProgram program <span class="fu">=</span> returnval <span class="fu">$</span> execState (evaluateBB (programEntryBBId program)) (initEvaluator program)</code></pre></div>
 </body>
 </html>
