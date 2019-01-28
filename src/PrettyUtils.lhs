@@ -1,8 +1,8 @@
 \begin{code}
 module PrettyUtils where
 import Data.Text.Prettyprint.Doc.Render.Text
-import qualified Data.Text.Lazy as L
 import Data.Text.Prettyprint.Doc
+import qualified Data.Text.Lazy as L
 
 docToText :: Doc ann -> L.Text
 docToText doc = renderLazy (layoutPretty defaultLayoutOptions doc)
