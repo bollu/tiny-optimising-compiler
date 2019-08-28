@@ -19,10 +19,12 @@ Start from:
     which can be evaluated at compile time.](transformconstantfolding.html)
 
 6. [The `register allocation` transform which allocates physical registers to
-    the infinite virtual registers of our SSA form.](registerallocation.html)
+    the infinite virtual registers of our SSA form.](transformregisterallocate.html)
 
-7. [The `mipsasm` final code generation pass which generates
-    MIPS assembly.](MIPSAsm.html)
+7. [The MIPS assembly specification](mipsasm.html), and the associated interpreter
+   which uses [SPIM](mipsinterpreter.hs)
+
+7. [The `mipsasm` code generation pass which generates MIPS assembly from our IR.](transformirtomips.html)
 <h2> Background </h2>
 
 I've wanted to write this for a while: a tiny *optimising* compiler for
